@@ -100,20 +100,9 @@ export const createDriver = async (req, res) => {
 export const getCollectionInventory = async (req, res) => {
     try {
         const partnerId = req.user?.id;
+        // Assuming CollectionCenter stores inventory per material
         const inventory = await CollectionCenter.find({ partner: partnerId });
-        if (inventory.length === 0) {
-            return res.json({
-                success: true,
-                data: [
-                    { type: 'Plastic', amount: Math.floor(Math.random() * 500), capacity: 1000, color: '#00E676' },
-                    { type: 'Paper', amount: Math.floor(Math.random() * 800), capacity: 1000, color: '#29B6F6' },
-                    { type: 'Glass', amount: Math.floor(Math.random() * 300), capacity: 500, color: '#FFA000' },
-                    { type: 'Metal', amount: Math.floor(Math.random() * 200), capacity: 500, color: '#9C27B0' },
-                    { type: 'E-Waste', amount: Math.floor(Math.random() * 100), capacity: 200, color: '#EF5350' },
-                    { type: 'Organic', amount: Math.floor(Math.random() * 400), capacity: 500, color: '#8D6E63' }
-                ]
-            });
-        }
+        // If no real inventory exists, return empty array instead of mocks
         res.json({ success: true, data: inventory });
     }
     catch (error) {
@@ -124,13 +113,7 @@ export const getEarnings = async (req, res) => {
     try {
         const partnerId = req.user?.id;
         const transactions = await PartnerTransaction.find({ partner: partnerId }).sort({ createdAt: -1 });
-        if (transactions.length === 0) {
-            const sampleTransactions = [
-                { id: `TXN-${Math.floor(Math.random() * 10000)}`, date: new Date().toISOString().split('T')[0], type: 'Credit', amount: 1500, description: 'Pickup Completed', status: 'Completed' },
-                { id: `TXN-${Math.floor(Math.random() * 10000)}`, date: new Date(Date.now() - 86400000).toISOString().split('T')[0], type: 'Debit', amount: 500, description: 'Platform Fee', status: 'Completed' },
-            ];
-            return res.json({ success: true, data: sampleTransactions });
-        }
+        // Always return actual DB transactions
         res.json({ success: true, data: transactions });
     }
     catch (error) {
@@ -142,19 +125,7 @@ export const getSettings = async (req, res) => {
         const partnerId = req.user?.id;
         const profile = await PartnerProfile.findOne({ user: partnerId });
         if (!profile) {
-            return res.json({
-                success: true,
-                data: {
-                    companyName: 'ReLoop Partner Demo',
-                    gstNumber: '29ABCDE1234F1Z5',
-                    address: '123 Eco Park, Electronic City, Bangalore',
-                    contactEmail: 'contact@demo.in',
-                    phone: '+91 9876543210',
-                    bankAccountName: 'ReLoop Partner Demo',
-                    bankAccountNumber: '**** **** 4567',
-                    ifscCode: 'HDFC0001234'
-                }
-            });
+            return res.json({ success: true, data: {} });
         }
         res.json({ success: true, data: profile });
     }

@@ -27,7 +27,7 @@ export const getDashboardStats = async (req: Request, res: Response) => {
       // Count unique users and partners from Pickups related to these campaigns
       const pickups = await Pickup.find({ campaign: { $in: campaignIds } });
       const uniqueUsers = new Set(pickups.map(p => p.user?.toString()));
-      const uniquePartners = new Set(pickups.map(p => p.partner?.toString()));
+      const uniquePartners = new Set(pickups.map(p => (p as any).partner?.toString()));
       
       usersParticipated = uniqueUsers.size;
       partnersWorking = uniquePartners.size;

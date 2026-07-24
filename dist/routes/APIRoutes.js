@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
-import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Notification, CommunityPost } from '../models/Schemas.js';
+import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Notification, CommunityPost, Payout } from '../models/Schemas.js';
 import { authenticateToken, generateAccessToken, generateRefreshToken, verifyRefreshToken, requireAdmin } from '../middleware/SecurityAuth.js';
 import { uploadToCloudinary, sendEmail, emailTemplates, analyzeWasteImage, chatWithReLoopAi, razorpayInstance } from '../services/ExternalServices.js';
 import { sqliteFindUserByEmail, sqliteFindUserByPhone, sqliteCreateUser, sqliteGetUserProfile } from '../services/SqliteDb.js';
@@ -45,7 +45,17 @@ router.post('/auth/register', async (req, res) => {
             const hashedPassword = await bcrypt.hash(password, 10);
             const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
             const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
-            await Wallet.create({ user: user._id, balance: 0, ecoPoints: 0, level: 1 });
+            await Wallet.create({
+                user: user._id,
+                balance: 0,
+                ecoPoints: 0,
+                level: 1,
+                availableCoins: 0,
+                lifetimeCoins: 0,
+                coinsEarned: 0,
+                coinsRedeemed: 0,
+                totalRewards: 0
+            });
             await Kyc.create({ user: user._id, status: 'Pending' });
             userId = user._id.toString();
             profileName = profile.name;
@@ -59,7 +69,7 @@ router.post('/auth/register', async (req, res) => {
             success: true,
             token: accessToken,
             refreshToken,
-            user: { id: userId, email, name: profileName }
+            user: { id: userId, email, phone, name: profileName }
         });
     }
     catch (error) {
@@ -100,6 +110,7 @@ router.post('/auth/login', async (req, res) => {
             user: {
                 id: userIdStr,
                 email: user.email,
+                phone: user.phone || profile?.phone,
                 name: profile?.name || user.name || 'User',
                 avatarUrl: profile?.avatarUrl
             }
@@ -190,8 +201,9 @@ router.post('/auth/google', async (req, res) => {
             }
         }
         let userIdStr;
+        let user = null;
         if (useSqlite()) {
-            let user = await sqliteFindUserByEmail(email);
+            user = await sqliteFindUserByEmail(email);
             if (!user) {
                 userIdStr = 'u_' + Math.floor(100000 + Math.random() * 900000);
                 const googleId = idToken ? idToken.slice(-30) : 'g_' + Math.floor(100000 + Math.random() * 900000);
@@ -200,7 +212,7 @@ router.post('/auth/google', async (req, res) => {
             userIdStr = user.id;
         }
         else {
-            let user = await User.findOne({ email });
+            user = await User.findOne({ email });
             if (!user) {
                 user = await User.create({
                     email,
@@ -222,6 +234,7 @@ router.post('/auth/google', async (req, res) => {
             user: {
                 id: userIdStr,
                 email,
+                phone: user?.phone,
                 name,
                 avatarUrl: photoUrl
             }
@@ -409,25 +422,65 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-// ─── 5. PROFILE ROUTER (/api/profile, /api/user-profile) ──────────────────────
+// ─── 5. PROFILE ROUTER (/api/profile) ──────────────────────
 const handleGetProfile = async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         let profile;
         if (useSqlite()) {
             profile = await sqliteGetUserProfile(userId);
         }
         else {
-            const p = await Profile.findOne({ user: userId }).lean();
-            const w = await Wallet.findOne({ user: userId }).lean();
+            let p = await Profile.findOne({ user: userId });
+            let w = await Wallet.findOne({ user: userId });
+            const u = await User.findById(userId);
+            if (!p && u) {
+                p = await Profile.create({
+                    user: userId,
+                    name: 'New User',
+                    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+                    languages: ['English'],
+                    address: '',
+                    dob: '',
+                    gender: 'Other',
+                    aadhaarNumber: '',
+                    panNumber: ''
+                });
+            }
+            if (!w && u) {
+                w = await Wallet.create({
+                    user: userId,
+                    balance: 0,
+                    ecoPoints: 0,
+                    level: 1,
+                    availableCoins: 0,
+                    lifetimeCoins: 0,
+                    coinsEarned: 0,
+                    coinsRedeemed: 0,
+                    totalRewards: 0
+                });
+            }
             if (p) {
                 profile = {
-                    ...p,
-                    ecoPoints: w?.ecoPoints || 450,
-                    balance: w?.balance || 1500,
+                    ...p.toObject(),
+                    email: u?.email || '',
+                    phone: u?.phone || '',
+                    ecoPoints: w?.ecoPoints || 0,
+                    balance: w?.balance || 0,
                     level: w?.level || 1,
+                    availableCoins: w?.availableCoins || 0,
+                    lifetimeCoins: w?.lifetimeCoins || 0,
+                    coinsEarned: w?.coinsEarned || 0,
+                    coinsRedeemed: w?.coinsRedeemed || 0,
+                    totalRewards: w?.totalRewards || 0,
                     aadhaarVerified: true,
-                    accountNumber: w?.accountNumber || ''
+                    accountNumber: w?.accountNumber || '',
+                    ifscCode: w?.ifscCode || '',
+                    bankName: w?.bankName || '',
+                    accountHolderName: w?.accountHolderName || '',
+                    branch: w?.branch || '',
+                    upiId: w?.upiId || '',
+                    upiQrUrl: w?.upiQrUrl || ''
                 };
             }
         }
@@ -448,34 +501,42 @@ const handleGetProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-router.get('/profile', authenticateToken, handleGetProfile);
-router.get('/user-profile', authenticateToken, handleGetProfile);
 const handleUpdateProfile = async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
-        const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id } = req.body;
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch } = req.body;
         let updateData = {};
         if (name)
             updateData.name = name;
-        if (phone)
-            updateData.phone = phone;
         if (aadhaar_number)
             updateData.aadhaarNumber = aadhaar_number;
         if (pan_number)
             updateData.panNumber = pan_number;
+        if (address)
+            updateData.address = address;
+        if (dob)
+            updateData.dob = dob;
+        if (gender)
+            updateData.gender = gender;
         let avatarUrl = undefined;
         if (profile_image) {
             avatarUrl = await uploadToCloudinary(profile_image, 'profiles');
             updateData.avatarUrl = avatarUrl;
         }
         if (!useSqlite()) {
-            if (email) {
-                await User.findOneAndUpdate({ _id: userId }, { email });
+            let userUpdate = {};
+            if (email)
+                userUpdate.email = email;
+            if (phone)
+                userUpdate.phone = phone;
+            if (Object.keys(userUpdate).length > 0) {
+                await User.findOneAndUpdate({ _id: userId }, userUpdate);
             }
             if (Object.keys(updateData).length > 0) {
                 await Profile.findOneAndUpdate({ user: userId }, updateData, { new: true, upsert: true });
             }
             let walletUpdate = {};
+            let walletUnset = {};
             if (account_number)
                 walletUpdate.accountNumber = account_number;
             if (ifsc_code)
@@ -484,33 +545,79 @@ const handleUpdateProfile = async (req, res) => {
                 walletUpdate.bankName = bank_name;
             if (upi_id)
                 walletUpdate.upiId = upi_id;
-            if (Object.keys(walletUpdate).length > 0) {
-                await Wallet.findOneAndUpdate({ user: userId }, walletUpdate, { new: true, upsert: true });
+            if (account_holder_name)
+                walletUpdate.accountHolderName = account_holder_name;
+            if (branch)
+                walletUpdate.branch = branch;
+            if (upi_qr_url) {
+                if (upi_qr_url === 'DELETE') {
+                    walletUnset.upiQrUrl = 1;
+                }
+                else if (upi_qr_url.startsWith('data:image')) {
+                    walletUpdate.upiQrUrl = await uploadToCloudinary(upi_qr_url, 'qrcodes');
+                }
+                else {
+                    walletUpdate.upiQrUrl = upi_qr_url;
+                }
+            }
+            if (Object.keys(walletUpdate).length > 0 || Object.keys(walletUnset).length > 0) {
+                const updateObj = {};
+                if (Object.keys(walletUpdate).length > 0)
+                    updateObj.$set = walletUpdate;
+                if (Object.keys(walletUnset).length > 0)
+                    updateObj.$unset = walletUnset;
+                await Wallet.findOneAndUpdate({ user: userId }, updateObj, { new: true, upsert: true });
             }
         }
-        const updatedProfile = {
-            name: name || 'Srinath',
-            email: email || 'nithiinsrinu@gmail.com',
-            phone: phone || '+91 98765 43210',
-            aadhaarNumber: aadhaar_number || 'XXXX XXXX 1274',
-            avatarUrl: avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
-            accountNumber: account_number,
-            ifscCode: ifsc_code,
-            bankName: bank_name,
-            upiId: upi_id
-        };
-        res.json(updatedProfile);
+        let profileResponse = {};
+        if (useSqlite()) {
+            profileResponse = await sqliteGetUserProfile(userId);
+        }
+        else {
+            const p = await Profile.findOne({ user: userId }).lean();
+            const w = await Wallet.findOne({ user: userId }).lean();
+            const u = await User.findById(userId).lean();
+            if (p) {
+                profileResponse = {
+                    ...p,
+                    email: u?.email || '',
+                    phone: u?.phone || '',
+                    ecoPoints: w?.ecoPoints || 0,
+                    balance: w?.balance || 0,
+                    level: w?.level || 1,
+                    availableCoins: w?.availableCoins || 0,
+                    lifetimeCoins: w?.lifetimeCoins || 0,
+                    coinsEarned: w?.coinsEarned || 0,
+                    coinsRedeemed: w?.coinsRedeemed || 0,
+                    totalRewards: w?.totalRewards || 0,
+                    accountNumber: w?.accountNumber || '',
+                    ifscCode: w?.ifscCode || '',
+                    bankName: w?.bankName || '',
+                    accountHolderName: w?.accountHolderName || '',
+                    branch: w?.branch || '',
+                    upiId: w?.upiId || '',
+                    upiQrUrl: w?.upiQrUrl || ''
+                };
+            }
+        }
+        res.json(profileResponse);
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+router.get('/profile', authenticateToken, handleGetProfile);
 router.put('/profile', authenticateToken, handleUpdateProfile);
-router.put('/user-profile', authenticateToken, handleUpdateProfile);
+router.put('/profile/payment', authenticateToken, handleUpdateProfile);
+router.post('/profile/upload-qr', authenticateToken, handleUpdateProfile);
+router.delete('/profile/qr', authenticateToken, async (req, res) => {
+    req.body.upi_qr_url = 'DELETE';
+    await handleUpdateProfile(req, res);
+});
 // ─── BANK DETAILS ROUTER (/api/bank-details, /api/bank) ──────────────────────
 const handleGetBankDetails = async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         let bankData = {
             success: true,
             bankName: 'State Bank of India',
@@ -543,7 +650,7 @@ const handleGetBankDetails = async (req, res) => {
 };
 const handleUpdateBankDetails = async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         const { bankName, accountNumber, ifscCode, upiId, accountHolderName } = req.body;
         if (!useSqlite()) {
             await Wallet.findOneAndUpdate({ user: userId }, { bankName, accountNumber, ifscCode, upiId }, { new: true, upsert: true });
@@ -573,9 +680,45 @@ router.post('/bank-details', authenticateToken, handleUpdateBankDetails);
 router.put('/bank-details', authenticateToken, handleUpdateBankDetails);
 router.post('/bank', authenticateToken, handleUpdateBankDetails);
 router.put('/bank', authenticateToken, handleUpdateBankDetails);
+// ─── PAYOUT ROUTER (/api/payouts) ────────────────────────────────────────────────
+router.post('/payouts/request', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        const { amount, method } = req.body;
+        if (!amount || amount < 100) {
+            return res.status(400).json({ success: false, message: 'Minimum payout is INR 100' });
+        }
+        if (!useSqlite()) {
+            const wallet = await Wallet.findOne({ user: userId });
+            if (!wallet || wallet.balance < amount) {
+                return res.status(400).json({ success: false, message: 'Insufficient balance' });
+            }
+            // Deduct from active balance
+            wallet.balance -= amount;
+            await wallet.save();
+            // Create a pending Payout record
+            const payout = await Payout.create({
+                user: userId,
+                amount,
+                method: method || 'UPI',
+                status: 'Pending',
+                destinationDetails: {
+                    accountNumber: wallet.accountNumber,
+                    ifscCode: wallet.ifscCode,
+                    upiId: wallet.upiId
+                }
+            });
+            return res.json({ success: true, payout });
+        }
+        res.json({ success: true, payout: { amount, status: 'Pending' } });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 // ─── 6. KYC ROUTER (/api/kyc) ────────────────────────────────────────────────
 router.post('/kyc/verify', authenticateToken, async (req, res) => {
-    const userId = req.userId || 'u_default_101';
+    const userId = req.userId || '605c72d6248c89423c7b2a75';
     const { FrontBase64, BackBase64 } = req.body;
     try {
         let frontUrl = '';
@@ -611,7 +754,7 @@ router.post('/kyc/verify', authenticateToken, async (req, res) => {
 // ─── 7. WALLET & RAZORPAY PAYMENT API (/api/wallet) ──────────────────────────
 router.get('/wallet', authenticateToken, async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         if (!useSqlite()) {
             const wallet = await Wallet.findOne({ user: userId });
             return res.json(wallet);
@@ -640,7 +783,7 @@ router.post('/wallet/razorpay/create-order', authenticateToken, async (req, res)
     }
 });
 router.post('/wallet/razorpay/verify', authenticateToken, async (req, res) => {
-    const userId = req.userId || 'u_default_101';
+    const userId = req.userId || '605c72d6248c89423c7b2a75';
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount } = req.body;
     try {
         const generated_signature = crypto
@@ -674,7 +817,7 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req, res) => {
 });
 router.get('/transactions', authenticateToken, async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         if (!useSqlite()) {
             const txs = await WalletTransaction.find({ user: userId }).sort({ date: -1 });
             return res.json(txs);
@@ -689,7 +832,7 @@ router.get('/transactions', authenticateToken, async (req, res) => {
     }
 });
 router.post('/withdraw', authenticateToken, async (req, res) => {
-    const userId = req.userId || 'u_default_101';
+    const userId = req.userId || '605c72d6248c89423c7b2a75';
     const { amount, method } = req.body;
     if (!amount || amount <= 0)
         return res.status(400).json({ success: false, message: 'Invalid amount' });
@@ -712,7 +855,7 @@ router.post('/withdraw', authenticateToken, async (req, res) => {
 // ─── 8. NOTIFICATIONS (/api/notifications) ──────────────────────────────────
 router.get('/notifications', authenticateToken, async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         if (!useSqlite()) {
             const notes = await Notification.find({ user: userId }).sort({ timestamp: -1 });
             return res.json(notes);
@@ -757,7 +900,7 @@ router.get('/challenges', authenticateToken, (req, res) => {
 });
 // ─── 9. AI SCANNER & CHATBOT (/api/ai, /api/scanner, /api/chat) ──────────────
 const handleAiScan = async (req, res) => {
-    const userId = req.userId || 'u_default_101';
+    const userId = req.userId || '605c72d6248c89423c7b2a75';
     const { imageBase64 } = req.body;
     if (!imageBase64)
         return res.status(400).json({ success: false, message: 'Image base64 content is required' });
@@ -780,7 +923,7 @@ const handleAiScan = async (req, res) => {
     }
 };
 const handleAiChat = async (req, res) => {
-    const userId = req.userId || 'u_default_101';
+    const userId = req.userId || '605c72d6248c89423c7b2a75';
     const { message } = req.body;
     if (!message)
         return res.status(400).json({ success: false, message: 'Message text is required' });
@@ -834,7 +977,7 @@ router.get('/chat/history', authenticateToken, async (req, res) => {
 // ─── 10. PICKUPS SYSTEM (/api/pickups) ────────────────────────────────────────
 router.get('/pickups', authenticateToken, async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         if (!useSqlite()) {
             const pickups = await Pickup.find({ user: userId }).sort({ createdAt: -1 });
             return res.json(pickups);
@@ -849,7 +992,7 @@ router.get('/pickups', authenticateToken, async (req, res) => {
 });
 router.post('/pickups', authenticateToken, async (req, res) => {
     try {
-        const userId = req.userId || 'u_default_101';
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
         const { waste_type_id, waste_type_name, estimated_weight_kg, estimated_price, address, latitude, longitude, scheduled_date, notes } = req.body;
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
         const qrCode = 'QR_' + Math.floor(100000 + Math.random() * 900000);

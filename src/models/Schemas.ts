@@ -30,6 +30,7 @@ export interface IProfile extends Document {
   avatarUrl?: string;
   dob?: string;
   gender?: 'Male' | 'Female' | 'Other';
+  address?: string;
   languages: string[];
   aadhaarNumber?: string;
   panNumber?: string;
@@ -51,6 +52,7 @@ const ProfileSchema = new Schema<IProfile>({
   avatarUrl: { type: String, default: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100' },
   dob: { type: String },
   gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+  address: { type: String },
   languages: { type: [String], default: ['English'] },
   aadhaarNumber: { type: String },
   panNumber: { type: String },
@@ -133,12 +135,19 @@ export interface IWallet extends Document {
   totalRewardsEarned: number;
   pendingRewards: number;
   totalPaid: number;
+  availableCoins?: number;
+  lifetimeCoins?: number;
+  coinsEarned?: number;
+  coinsRedeemed?: number;
+  totalRewards?: number;
   upiId?: string;
   bankName?: string;
   accountHolderName?: string;
   accountNumber?: string;
   ifscCode?: string;
+  branch?: string;
   preferredPayoutMethod?: 'BANK' | 'UPI';
+  upiQrUrl?: string;
   bankDetailsSavedAt?: Date;
 }
 
@@ -150,11 +159,17 @@ const WalletSchema = new Schema<IWallet>({
   totalRewardsEarned: { type: Number, default: 0 },
   pendingRewards: { type: Number, default: 0 },
   totalPaid: { type: Number, default: 0 },
+  availableCoins: { type: Number, default: 0 },
+  lifetimeCoins: { type: Number, default: 0 },
+  coinsEarned: { type: Number, default: 0 },
+  coinsRedeemed: { type: Number, default: 0 },
+  totalRewards: { type: Number, default: 0 },
   upiId: { type: String },
   bankName: { type: String },
   accountHolderName: { type: String },
   accountNumber: { type: String },
   ifscCode: { type: String },
+  branch: { type: String },
   preferredPayoutMethod: { type: String, enum: ['BANK', 'UPI'] },
   upiQrUrl: { type: String },
   bankDetailsSavedAt: { type: Date }
@@ -944,3 +959,74 @@ const CampaignReportSchema = new Schema<ICampaignReport>({
 }, { timestamps: true });
 
 export const CampaignReport = mongoose.model<ICampaignReport>('CampaignReport', CampaignReportSchema);
+
+// ─── 27. REDEMPTION SCHEMA ─────────────────────────────────────────────────────
+export interface IRedemption extends Document {
+  user: mongoose.Types.ObjectId;
+  category: 'Gift Card' | 'Coupon' | 'Mobile Recharge' | 'Shopping Voucher' | 'Tree Plantation' | 'Charity Donation' | 'Premium Membership' | 'Merchandise';
+  itemDetails: {
+    name: string;
+    code?: string;
+    pin?: string;
+    phone?: string;
+    provider?: string;
+  };
+  coinCost: number;
+  status: 'Pending' | 'Completed' | 'Failed';
+  createdAt: Date;
+}
+
+const RedemptionSchema = new Schema<IRedemption>({
+  user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  category: { type: String, enum: ['Gift Card', 'Coupon', 'Mobile Recharge', 'Shopping Voucher', 'Tree Plantation', 'Charity Donation', 'Premium Membership', 'Merchandise'], required: true },
+  itemDetails: {
+    name: { type: String, required: true },
+    code: { type: String },
+    pin: { type: String },
+    phone: { type: String },
+    provider: { type: String }
+  },
+  coinCost: { type: Number, required: true },
+  status: { type: String, enum: ['Pending', 'Completed', 'Failed'], default: 'Completed' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+export const Redemption = mongoose.model<IRedemption>('Redemption', RedemptionSchema);
+
+// ─── 28. GIFT CARD SCHEMA ──────────────────────────────────────────────────────
+export interface IGiftCard extends Document {
+  brandName: string;
+  voucherCode: string;
+  pin: string;
+  coinCost: number;
+  status: 'Available' | 'Redeemed';
+}
+
+const GiftCardSchema = new Schema<IGiftCard>({
+  brandName: { type: String, required: true },
+  voucherCode: { type: String, required: true, unique: true },
+  pin: { type: String, required: true },
+  coinCost: { type: Number, required: true },
+  status: { type: String, enum: ['Available', 'Redeemed'], default: 'Available' }
+});
+
+export const GiftCard = mongoose.model<IGiftCard>('GiftCard', GiftCardSchema);
+
+// ─── 29. COUPON SCHEMA ─────────────────────────────────────────────────────────
+export interface ICoupon extends Document {
+  brandName: string;
+  discountCode: string;
+  coinCost: number;
+  expiryDate: Date;
+  status: 'Available' | 'Redeemed';
+}
+
+const CouponSchema = new Schema<ICoupon>({
+  brandName: { type: String, required: true },
+  discountCode: { type: String, required: true, unique: true },
+  coinCost: { type: Number, required: true },
+  expiryDate: { type: Date, required: true },
+  status: { type: String, enum: ['Available', 'Redeemed'], default: 'Available' }
+});
+
+export const Coupon = mongoose.model<ICoupon>('Coupon', CouponSchema);

@@ -1,30 +1,50 @@
-import { Company, Campaign, CampaignBudget, CompanyTransaction } from '../models/Schemas.js';
+import { Company, Campaign, CampaignBudget, CompanyTransaction, Pickup, CampaignReport } from '../models/Schemas.js';
+const MOCK_USER_ID = '64b1f9c8f93e9a001c8ebbbb';
 export const getDashboardStats = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         const profile = await Company.findOne({ user: userId });
-        // In real app, calculate from actual campaigns
+        let totalWasteCollected = 0;
+        let co2Saved = 0;
+        let treesSaved = 0;
+        let usersParticipated = 0;
+        let partnersWorking = 0;
+        if (profile) {
+            const reports = await CampaignReport.find({ company: profile._id });
+            totalWasteCollected = reports.reduce((acc, r) => acc + (r.totalWeightCollected || 0), 0);
+            co2Saved = reports.reduce((acc, r) => acc + (r.co2SavedKg || 0), 0);
+            treesSaved = reports.reduce((acc, r) => acc + (r.treesSaved || 0), 0);
+            const campaigns = await Campaign.find({ company: profile._id });
+            const campaignIds = campaigns.map(c => c._id);
+            // Count unique users and partners from Pickups related to these campaigns
+            const pickups = await Pickup.find({ campaign: { $in: campaignIds } });
+            const uniqueUsers = new Set(pickups.map(p => p.user?.toString()));
+            const uniquePartners = new Set(pickups.map(p => p.partner?.toString()));
+            usersParticipated = uniqueUsers.size;
+            partnersWorking = uniquePartners.size;
+        }
         const stats = {
             verificationStatus: profile?.status || 'Pending',
             totalCampaigns: await Campaign.countDocuments({ company: profile?._id }),
             activeCampaigns: await Campaign.countDocuments({ company: profile?._id, status: 'Active' }),
             totalBudget: profile?.csrBudget || 0,
             budgetUsed: profile?.totalSpent || 0,
-            totalWasteCollected: 15420, // Mocked aggregation for overview
-            co2Saved: 4200,
-            treesSaved: 125,
-            usersParticipated: 450,
-            partnersWorking: 12
+            totalWasteCollected,
+            co2Saved,
+            treesSaved,
+            usersParticipated,
+            partnersWorking
         };
         res.json({ success: true, data: stats });
     }
     catch (error) {
+        console.error('getDashboardStats Error:', error);
         res.status(500).json({ success: false, message: 'Server Error', error });
     }
 };
 export const getProfile = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         let profile = await Company.findOne({ user: userId });
         // Auto-create dummy profile for testing if it doesn't exist
         if (!profile && process.env.NODE_ENV !== 'production') {
@@ -47,7 +67,7 @@ export const getProfile = async (req, res) => {
 };
 export const updateProfile = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         const profile = await Company.findOneAndUpdate({ user: userId }, req.body, { new: true, upsert: true });
         res.json({ success: true, data: profile });
     }
@@ -57,7 +77,7 @@ export const updateProfile = async (req, res) => {
 };
 export const getCampaigns = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         const profile = await Company.findOne({ user: userId });
         if (!profile)
             return res.json({ success: true, data: [] });
@@ -70,7 +90,7 @@ export const getCampaigns = async (req, res) => {
 };
 export const createCampaign = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         const profile = await Company.findOne({ user: userId });
         if (!profile)
             return res.status(404).json({ success: false, message: 'Company profile not found' });
@@ -93,7 +113,7 @@ export const createCampaign = async (req, res) => {
 };
 export const getTransactions = async (req, res) => {
     try {
-        const userId = req.user?.id || 'dummy';
+        const userId = req.user?.id || MOCK_USER_ID;
         const profile = await Company.findOne({ user: userId });
         if (!profile)
             return res.json({ success: true, data: [] });
@@ -106,26 +126,36 @@ export const getTransactions = async (req, res) => {
 };
 export const getAnalytics = async (req, res) => {
     try {
-        // Return structured mock data for charts since aggregations require seeded data
-        const analytics = {
-            monthlyTrends: [
-                { month: 'Jan', plastic: 400, metal: 240, paper: 2400 },
-                { month: 'Feb', plastic: 300, metal: 139, paper: 2210 },
-                { month: 'Mar', plastic: 200, metal: 980, paper: 2290 },
-                { month: 'Apr', plastic: 278, metal: 390, paper: 2000 },
-                { month: 'May', plastic: 189, metal: 480, paper: 2181 },
-                { month: 'Jun', plastic: 239, metal: 380, paper: 2500 }
-            ],
-            topCities: [
-                { name: 'Bangalore', value: 4000 },
-                { name: 'Mumbai', value: 3000 },
-                { name: 'Delhi', value: 2000 },
-                { name: 'Hyderabad', value: 1500 }
-            ]
-        };
-        res.json({ success: true, data: analytics });
+        const userId = req.user?.id || MOCK_USER_ID;
+        const profile = await Company.findOne({ user: userId });
+        if (!profile) {
+            return res.json({ success: true, data: { monthlyTrends: [], topCities: [] } });
+        }
+        // Aggregate monthly trends from CampaignReports
+        const reports = await CampaignReport.find({ company: profile._id }).sort({ year: 1, month: 1 });
+        const monthlyTrends = reports.map(r => ({
+            month: `${r.month}/${r.year}`,
+            plastic: r.totalWeightCollected * 0.5, // Dummy split based on actual weight for now
+            metal: r.totalWeightCollected * 0.3,
+            paper: r.totalWeightCollected * 0.2
+        }));
+        // In a real production system, topCities would be aggregated from Pickups location data.
+        // For now we return empty or dynamic based on active campaigns.
+        const campaigns = await Campaign.find({ company: profile._id });
+        const topCities = campaigns.map(c => ({
+            name: c.title,
+            value: c.totalBudget
+        })).slice(0, 4);
+        res.json({
+            success: true,
+            data: {
+                monthlyTrends: monthlyTrends.length ? monthlyTrends : [],
+                topCities: topCities.length ? topCities : []
+            }
+        });
     }
     catch (error) {
+        console.error('getAnalytics Error:', error);
         res.status(500).json({ success: false, message: 'Server Error', error });
     }
 };

@@ -148,7 +148,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<{
       })
     });
     
-    const data = await response.json();
+    const data = await response.json() as any;
     const result = JSON.parse(data.choices[0].message.content);
     return {
       detectedClass: result.category || 'Mixed Waste',
@@ -208,7 +208,7 @@ Always stay in character as ReLoop AI. Your mission is to provide helpful waste 
       })
     });
 
-    const data = await response.json();
+    const data = await response.json() as any;
     return data.choices[0].message.content;
   } catch (error) {
     console.error('[Mistral AI Chat Error]:', error);

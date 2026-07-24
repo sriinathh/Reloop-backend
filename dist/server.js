@@ -15,7 +15,7 @@ import morgan from 'morgan';
 import apiRouter from './routes/APIRoutes.js';
 import { configureSecurityHeaders, configureCors, configureCompression, configureMongoSanitize, configureRateLimiter } from './middleware/SecurityAuth.js';
 import { initializeSocketTracking } from './services/ExternalServices.js';
-import { WasteCategory, Badge, Challenge, LanguageTranslation, User, Profile, Kyc, Wallet } from './models/Schemas.js';
+import { WasteCategory, Badge, Challenge, LanguageTranslation, User, Profile, Kyc, Wallet, GiftCard, Coupon } from './models/Schemas.js';
 import { DEFAULT_WASTE_CATEGORIES, DEFAULT_BADGES, DEFAULT_CHALLENGES, DEFAULT_LANGUAGES } from './config/SeedData.js';
 const app = express();
 const server = http.createServer(app);
@@ -42,10 +42,12 @@ app.use(configureRateLimiter);
 import fintechRouter from './routes/FintechRoutes.js';
 import partnerRouter from './routes/partnerRoutes.js';
 import companyRouter from './routes/companyRoutes.js';
+import adminRouter from './routes/adminRoutes.js';
 app.use('/api', apiRouter);
 app.use('/api', fintechRouter);
 app.use('/api/partner', partnerRouter);
 app.use('/api/company', companyRouter);
+app.use('/api/admin', adminRouter);
 // Base Status Route
 app.get('/health', (req, res) => {
     res.json({
@@ -98,6 +100,27 @@ const seedDatabase = async () => {
             await LanguageTranslation.insertMany(DEFAULT_LANGUAGES);
             console.log('[Seeding] Language Translations seeded successfully');
         }
+        // 4a. Seed Gift Cards
+        const gcCount = await GiftCard.countDocuments();
+        if (gcCount === 0) {
+            await GiftCard.insertMany([
+                { brandName: 'Amazon Pay', voucherCode: 'AMZ-COIN-WALLET-98231', pin: '9841', coinCost: 500, status: 'Available' },
+                { brandName: 'Amazon Pay', voucherCode: 'AMZ-COIN-WALLET-54812', pin: '1432', coinCost: 1000, status: 'Available' },
+                { brandName: 'Starbucks', voucherCode: 'SBUX-COIN-WALLET-12492', pin: '8872', coinCost: 300, status: 'Available' },
+                { brandName: 'Myntra Shopping', voucherCode: 'MYN-COIN-WALLET-48201', pin: '5401', coinCost: 750, status: 'Available' }
+            ]);
+            console.log('[Seeding] Gift Cards seeded successfully');
+        }
+        // 4b. Seed Coupons
+        const couponCount = await Coupon.countDocuments();
+        if (couponCount === 0) {
+            await Coupon.insertMany([
+                { brandName: 'Swiggy Food', discountCode: 'SWIGGY150', coinCost: 150, expiryDate: new Date(Date.now() + 30 * 86400000), status: 'Available' },
+                { brandName: 'Zomato Pro', discountCode: 'ZOMATO200', coinCost: 200, expiryDate: new Date(Date.now() + 60 * 86400000), status: 'Available' },
+                { brandName: 'Uber Rides', discountCode: 'UBERFREE50', coinCost: 100, expiryDate: new Date(Date.now() + 15 * 86400000), status: 'Available' }
+            ]);
+            console.log('[Seeding] Coupons seeded successfully');
+        }
         // 5. Seed default test customer if empty
         // 5. Seed default test customer with valid bcrypt password
         const testPasswordHash = await bcrypt.hash('password', 10);
@@ -118,7 +141,12 @@ const seedDatabase = async () => {
                 user: testUser._id,
                 balance: 1500,
                 ecoPoints: 450,
-                level: 1
+                level: 1,
+                availableCoins: 15000,
+                lifetimeCoins: 15000,
+                coinsEarned: 15000,
+                coinsRedeemed: 0,
+                totalRewards: 1500
             });
             await Kyc.create({
                 user: testUser._id,

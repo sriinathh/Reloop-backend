@@ -22,7 +22,9 @@ import {
   adminGetPickups,
   adminUpdatePickupStatus,
   adminCreateCompany,
-  adminDownloadInvoice
+  adminDownloadInvoice,
+  getRedemptionStore,
+  redeemCoins
 } from '../controllers/FintechController.js';
 import { getDashboardStats, getGrowthData } from '../controllers/AdminAnalyticsController.js';
 
@@ -34,6 +36,8 @@ router.get('/transactions', authenticateToken, getTransactions);
 router.get('/invoices', authenticateToken, getInvoices);
 router.post('/payouts/request', authenticateToken, requestPayout);
 router.put('/bank-details', authenticateToken, saveBankDetails);
+router.get('/wallet/redemption-store', authenticateToken, getRedemptionStore);
+router.post('/wallet/redeem', authenticateToken, redeemCoins);
 
 // ─── COMPANY ROUTES ──────────────────────────────────────────────────────────
 router.post('/company/campaign', authenticateToken, companyCreateCampaign);

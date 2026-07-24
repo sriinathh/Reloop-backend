@@ -15,6 +15,7 @@ const ProfileSchema = new Schema({
     avatarUrl: { type: String, default: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100' },
     dob: { type: String },
     gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+    address: { type: String },
     languages: { type: [String], default: ['English'] },
     aadhaarNumber: { type: String },
     panNumber: { type: String },
@@ -63,12 +64,19 @@ const WalletSchema = new Schema({
     totalRewardsEarned: { type: Number, default: 0 },
     pendingRewards: { type: Number, default: 0 },
     totalPaid: { type: Number, default: 0 },
+    availableCoins: { type: Number, default: 0 },
+    lifetimeCoins: { type: Number, default: 0 },
+    coinsEarned: { type: Number, default: 0 },
+    coinsRedeemed: { type: Number, default: 0 },
+    totalRewards: { type: Number, default: 0 },
     upiId: { type: String },
     bankName: { type: String },
     accountHolderName: { type: String },
     accountNumber: { type: String },
     ifscCode: { type: String },
+    branch: { type: String },
     preferredPayoutMethod: { type: String, enum: ['BANK', 'UPI'] },
+    upiQrUrl: { type: String },
     bankDetailsSavedAt: { type: Date }
 });
 export const Wallet = mongoose.model('Wallet', WalletSchema);
@@ -419,3 +427,34 @@ const CampaignReportSchema = new Schema({
     budgetSpent: { type: Number, default: 0 }
 }, { timestamps: true });
 export const CampaignReport = mongoose.model('CampaignReport', CampaignReportSchema);
+const RedemptionSchema = new Schema({
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    category: { type: String, enum: ['Gift Card', 'Coupon', 'Mobile Recharge', 'Shopping Voucher', 'Tree Plantation', 'Charity Donation', 'Premium Membership', 'Merchandise'], required: true },
+    itemDetails: {
+        name: { type: String, required: true },
+        code: { type: String },
+        pin: { type: String },
+        phone: { type: String },
+        provider: { type: String }
+    },
+    coinCost: { type: Number, required: true },
+    status: { type: String, enum: ['Pending', 'Completed', 'Failed'], default: 'Completed' },
+    createdAt: { type: Date, default: Date.now }
+});
+export const Redemption = mongoose.model('Redemption', RedemptionSchema);
+const GiftCardSchema = new Schema({
+    brandName: { type: String, required: true },
+    voucherCode: { type: String, required: true, unique: true },
+    pin: { type: String, required: true },
+    coinCost: { type: Number, required: true },
+    status: { type: String, enum: ['Available', 'Redeemed'], default: 'Available' }
+});
+export const GiftCard = mongoose.model('GiftCard', GiftCardSchema);
+const CouponSchema = new Schema({
+    brandName: { type: String, required: true },
+    discountCode: { type: String, required: true, unique: true },
+    coinCost: { type: Number, required: true },
+    expiryDate: { type: Date, required: true },
+    status: { type: String, enum: ['Available', 'Redeemed'], default: 'Available' }
+});
+export const Coupon = mongoose.model('Coupon', CouponSchema);

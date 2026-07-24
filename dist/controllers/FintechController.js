@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { Wallet, WalletTransaction, Payout, Reward, Campaign, Invoice } from '../models/Schemas.js';
+import { Wallet, WalletTransaction, Payout, Reward, Campaign, Invoice, User, Profile, Kyc, Leaderboard, Notification, AuditLog, Pickup, GiftCard, Coupon, Redemption } from '../models/Schemas.js';
 import { paymentService } from '../services/PaymentService.js';
 import { invoiceService } from '../services/InvoiceService.js';
 import { emailService } from '../services/EmailService.js';
@@ -349,15 +349,79 @@ export const adminGetUsers = async (req, res) => {
 export const adminGetUserById = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await mongoose.model('User').findById(id).select('-password');
+        const user = await User.findById(id).select('-password').lean();
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
-        const profile = await mongoose.model('Profile').findOne({ user: id });
-        const wallet = await mongoose.model('Wallet').findOne({ user: id });
-        const pickups = await mongoose.model('Pickup').find({ user: id }).sort({ createdAt: -1 });
-        const transactions = await mongoose.model('WalletTransaction').find({ user: id }).sort({ date: -1 });
-        const payouts = await mongoose.model('Payout').find({ user: id }).sort({ createdAt: -1 });
+        const profile = await Profile.findOne({ user: id }).lean();
+        const wallet = await Wallet.findOne({ user: id }).lean();
+        const kyc = await Kyc.findOne({ user: id }).lean();
+        const pickups = await Pickup.find({ user: id }).sort({ createdAt: -1 }).lean();
+        const transactions = await WalletTransaction.find({ user: id }).sort({ date: -1 }).lean();
+        const rewards = await Reward.find({ user: id }).sort({ createdAt: -1 }).lean();
+        const invoices = await Invoice.find({ user: id }).sort({ date: -1 }).lean();
+        const leaderboards = await Leaderboard.find({ user: id }).sort({ month: -1 }).lean();
+        // Calculate total carbon saved from completed pickups
+        const totalCarbonSaved = pickups
+            .filter((p) => p.status === 'completed' && p.actualWeightKg)
+            .reduce((acc, curr) => acc + (curr.actualWeightKg * 2.5), 0); // Assuming 2.5kg CO2 per kg waste
+        // Mock Badges for now
+        const badges = [
+            { id: 'b1', name: 'Eco Starter', icon: 'leaf', color: '#10B981' },
+            { id: 'b2', name: 'Recycle Pro', icon: 'recycle', color: '#3B82F6' }
+        ];
+        // Build dynamic activity timeline
+        const activityTimeline = [];
+        if (user.createdAt) {
+            activityTimeline.push({
+                type: 'signup',
+                title: 'Account Created',
+                description: 'User registered on ReLoop',
+                date: user.createdAt
+            });
+        }
+        if (profile && profile.joinedDate) {
+            activityTimeline.push({
+                type: 'profile_setup',
+                title: 'Profile Set Up',
+                description: 'User updated profile details',
+                date: profile.joinedDate
+            });
+        }
+        pickups.forEach((p) => {
+            activityTimeline.push({
+                type: 'pickup',
+                title: `Pickup Request (${p.status.replace('_', ' ')})`,
+                description: `Scheduled for ${new Date(p.scheduledDate).toLocaleDateString()} with est. weight of ${p.estimatedWeightKg} kg`,
+                date: p.createdAt
+            });
+        });
+        transactions.forEach((t) => {
+            activityTimeline.push({
+                type: 'transaction',
+                title: `${t.type === 'credit' ? 'Credit' : 'Debit'} Transaction`,
+                description: t.description || `Transaction amount: ₹${t.amount}`,
+                date: t.date
+            });
+        });
+        rewards.forEach((r) => {
+            activityTimeline.push({
+                type: 'reward',
+                title: `Reward ${r.status}`,
+                description: `${r.type} Reward of ₹${r.amount}: ${r.description}`,
+                date: r.createdAt
+            });
+        });
+        invoices.forEach((inv) => {
+            activityTimeline.push({
+                type: 'invoice',
+                title: `Invoice Generated`,
+                description: `Invoice ${inv.invoiceNumber} for ₹${inv.amount}`,
+                date: inv.date
+            });
+        });
+        // Sort descending by date
+        activityTimeline.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         res.json({
             success: true,
             user: {
@@ -367,9 +431,15 @@ export const adminGetUserById = async (req, res) => {
                 role: user.role,
                 profile,
                 wallet,
+                kyc,
                 pickups,
                 transactions,
-                payouts
+                rewards,
+                invoices,
+                leaderboards,
+                totalCarbonSaved,
+                badges,
+                activityTimeline
             }
         });
     }
@@ -476,7 +546,7 @@ export const adminUpdateKyc = async (req, res) => {
         if (!['Verified', 'Rejected'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid status' });
         }
-        const profile = await mongoose.model('Profile').findOne({ user: id });
+        const profile = await Profile.findOne({ user: id });
         if (!profile) {
             return res.status(404).json({ success: false, message: 'User profile not found' });
         }
@@ -491,45 +561,81 @@ export const adminUpdateKyc = async (req, res) => {
 export const adminSendMoney = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, description } = req.body;
-        const wallet = await mongoose.model('Wallet').findOne({ user: id });
+        const { amount, description, utrNumber, screenshotUrl } = req.body;
+        let wallet = await Wallet.findOne({ user: id });
         if (!wallet) {
-            return res.status(404).json({ success: false, message: 'Wallet not found' });
+            wallet = await Wallet.create({ user: id, balance: 0, ecoPoints: 0 });
         }
-        if (!wallet.accountNumber && !wallet.upiId) {
-            return res.status(400).json({ success: false, message: 'User has no bank or UPI details saved.' });
-        }
-        const payoutAmount = parseFloat(amount);
-        // Credit wallet BEFORE payout deducts it back down
-        wallet.balance += payoutAmount;
-        wallet.totalEarned += payoutAmount;
+        const rupeeAmount = parseFloat(amount);
+        const coinAmount = rupeeAmount * 10; // 10x ratio
+        // Credit wallet with ReLoop Coins
+        wallet.availableCoins = (wallet.availableCoins || 0) + coinAmount;
+        wallet.lifetimeCoins = (wallet.lifetimeCoins || 0) + coinAmount;
+        wallet.coinsEarned = (wallet.coinsEarned || 0) + coinAmount;
+        wallet.totalRewards = (wallet.totalRewards || 0) + rupeeAmount;
+        wallet.balance = (wallet.balance || 0) + rupeeAmount;
+        wallet.totalPaid = (wallet.totalPaid || 0) + rupeeAmount;
         await wallet.save();
-        // Create manual credit transaction history
-        await mongoose.model('WalletTransaction').create({
-            wallet: wallet._id,
+        // 1. Create Payout record (Transaction Record)
+        const payout = await Payout.create({
             user: id,
-            type: 'credit',
-            amount: payoutAmount,
-            status: 'completed',
-            description: description || 'Admin Manual Bank Transfer',
-            date: new Date()
-        });
-        // Create an immediate payout record
-        const payout = await mongoose.model('Payout').create({
-            user: id,
-            amount: payoutAmount,
+            amount: rupeeAmount,
             method: wallet.upiId ? 'UPI' : 'BANK',
             destinationDetails: {
                 accountNumber: wallet.accountNumber,
                 ifscCode: wallet.ifscCode,
                 upiId: wallet.upiId
             },
-            status: 'Pending'
+            status: 'Completed',
+            bankReferenceId: utrNumber || 'MANUAL-' + Date.now(),
+            processedAt: new Date()
         });
-        // Use the payment service to execute it directly to mock real transfer
-        const { paymentService } = await import('../services/PaymentService.js');
-        await paymentService.executePayout(payout._id.toString());
-        res.json({ success: true, message: 'Funds dispatched successfully' });
+        // 2. Create WalletTransaction (Reward Transaction / Transaction Record)
+        await WalletTransaction.create({
+            wallet: wallet._id,
+            user: id,
+            type: 'credit',
+            amount: coinAmount, // Stores ReLoop Coins
+            status: 'completed',
+            description: description || `Admin Manual Coin Credit: ${coinAmount} RL Coins`,
+            referenceId: payout._id.toString(),
+            date: new Date()
+        });
+        // 3. Create Reward document (Reward Ledger)
+        const reward = await Reward.create({
+            user: id,
+            amount: coinAmount, // Stores ReLoop Coins
+            type: 'CampaignBonus',
+            status: 'Paid',
+            description: description || `Admin manual coin payment reward: ${coinAmount} RL Coins`,
+            approvedAt: new Date()
+        });
+        // 4. Create Invoice
+        const invoice = await Invoice.create({
+            user: id,
+            payout: payout._id,
+            invoiceNumber: 'INV-' + Math.floor(100000 + Math.random() * 900000),
+            amount: rupeeAmount,
+            date: new Date()
+        });
+        // 5. Create Notification
+        await Notification.create({
+            user: id,
+            type: 'rewards',
+            title: 'Coins Added Successfully',
+            message: `You have received ${coinAmount} ReLoop Coins (equivalent to ₹${rupeeAmount}). Remarks: ${description}`,
+            color: '#10B981',
+            icon: 'check-circle',
+            timestamp: new Date()
+        });
+        // 6. Create Audit Log
+        await AuditLog.create({
+            userId: id,
+            action: `Admin manually paid user ₹${rupeeAmount} (${coinAmount} RL Coins). UTR: ${utrNumber}. Remarks: ${description}`,
+            ipAddress: req.ip || '127.0.0.1',
+            timestamp: new Date()
+        });
+        res.json({ success: true, message: 'Coins credited successfully', wallet, payout, invoice, reward });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -583,6 +689,145 @@ export const adminDownloadInvoice = async (req, res) => {
         doc.fontSize(10).fillColor('#6b7280').text('Thank you for recycling with ReLoop!', { align: 'center' });
         doc.text('This is a computer-generated invoice and does not require a physical signature.', { align: 'center' });
         doc.end();
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+export const getRedemptionStore = async (req, res) => {
+    try {
+        const giftCards = await GiftCard.find({ status: 'Available' }).lean();
+        const coupons = await Coupon.find({ status: 'Available' }).lean();
+        // Pre-defined catalog items
+        const otherOffers = [
+            { id: 'plant_tree', category: 'Tree Plantation', name: 'Plant an Organic Tree', coinCost: 500, description: 'Contribute 500 Coins to plant a tree and offset carbon footprint.' },
+            { id: 'charity_green', category: 'Charity Donation', name: 'Donate to Green Earth Foundation', coinCost: 1000, description: 'Donate ₹100 value to environmental cleanup charity.' },
+            { id: 'recharge_100', category: 'Mobile Recharge', name: '₹100 Talktime Recharge', coinCost: 1000, description: 'Instant mobile recharge voucher for any carrier.' },
+            { id: 'recharge_200', category: 'Mobile Recharge', name: '₹200 Talktime Recharge', coinCost: 2000, description: 'Instant mobile recharge voucher for any carrier.' },
+            { id: 'voucher_500', category: 'Shopping Voucher', name: '₹500 Lifestyle Voucher', coinCost: 5000, description: 'Get a ₹500 lifestyle shopping voucher code.' },
+            { id: 'premium_1m', category: 'Premium Membership', name: '1 Month Premium Subscription', coinCost: 2000, description: 'Enjoy double eco-points, priority pickups, and exclusive badges.' },
+            { id: 'merch_tshirt', category: 'Merchandise', name: 'ReLoop Organic Cotton T-Shirt', coinCost: 3500, description: 'Claim an exclusive branded ReLoop recycled cotton t-shirt.' }
+        ];
+        res.json({ success: true, giftCards, coupons, otherOffers });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+export const redeemCoins = async (req, res) => {
+    try {
+        const userId = req.userId;
+        const { category, itemId, itemDetails } = req.body;
+        let wallet = await Wallet.findOne({ user: userId });
+        if (!wallet) {
+            return res.status(404).json({ success: false, message: 'Wallet not found' });
+        }
+        let coinCost = 0;
+        let redeemedItemName = '';
+        let voucherCode = '';
+        let pin = '';
+        if (category === 'Gift Card') {
+            const giftCard = await GiftCard.findOne({ _id: itemId, status: 'Available' });
+            if (!giftCard)
+                return res.status(404).json({ success: false, message: 'Gift card not available' });
+            coinCost = giftCard.coinCost;
+            redeemedItemName = `${giftCard.brandName} Gift Card`;
+            voucherCode = giftCard.voucherCode;
+            pin = giftCard.pin;
+            giftCard.status = 'Redeemed';
+            await giftCard.save();
+        }
+        else if (category === 'Coupon') {
+            const coupon = await Coupon.findOne({ _id: itemId, status: 'Available' });
+            if (!coupon)
+                return res.status(404).json({ success: false, message: 'Coupon not available' });
+            coinCost = coupon.coinCost;
+            redeemedItemName = `${coupon.brandName} Discount Coupon`;
+            voucherCode = coupon.discountCode;
+            coupon.status = 'Redeemed';
+            await coupon.save();
+        }
+        else {
+            // Catalog items
+            const catalogCosts = {
+                plant_tree: 500,
+                charity_green: 1000,
+                recharge_100: 1000,
+                recharge_200: 2000,
+                voucher_500: 5000,
+                premium_1m: 2000,
+                merch_tshirt: 3500
+            };
+            coinCost = catalogCosts[itemId] || 1000;
+            redeemedItemName = itemDetails?.name || category;
+        }
+        if ((wallet.availableCoins || 0) < coinCost) {
+            return res.status(400).json({ success: false, message: `Insufficient coin balance. You need ${coinCost} RL Coins.` });
+        }
+        // Deduct coins
+        wallet.availableCoins = (wallet.availableCoins || 0) - coinCost;
+        wallet.coinsRedeemed = (wallet.coinsRedeemed || 0) + coinCost;
+        await wallet.save();
+        // 1. Create Redemption record
+        const redemption = await Redemption.create({
+            user: userId,
+            category,
+            itemDetails: {
+                name: redeemedItemName,
+                code: voucherCode || itemDetails?.code,
+                pin: pin || itemDetails?.pin,
+                phone: itemDetails?.phone,
+                provider: itemDetails?.provider
+            },
+            coinCost,
+            status: 'Completed'
+        });
+        // 2. Create WalletTransaction (Debit coin transaction)
+        await WalletTransaction.create({
+            wallet: wallet._id,
+            user: userId,
+            type: 'debit',
+            amount: coinCost,
+            status: 'completed',
+            description: `Redeemed ${coinCost} RL Coins for ${redeemedItemName}`,
+            referenceId: redemption._id.toString(),
+            date: new Date()
+        });
+        // 3. Create Invoice for Redemption (converting coins back to rupee representation for tax/records)
+        const payoutAmount = coinCost / 10;
+        const payout = await Payout.create({
+            user: userId,
+            amount: payoutAmount,
+            method: 'UPI',
+            status: 'Completed',
+            bankReferenceId: 'REDEEM-' + redemption._id.toString().slice(-8).toUpperCase(),
+            processedAt: new Date()
+        });
+        const invoice = await Invoice.create({
+            user: userId,
+            payout: payout._id,
+            invoiceNumber: 'INV-RED-' + Math.floor(100000 + Math.random() * 900000),
+            amount: payoutAmount,
+            date: new Date()
+        });
+        // 4. Create Notification
+        await Notification.create({
+            user: userId,
+            type: 'wallet',
+            title: 'Voucher Redeemed!',
+            message: `Successfully redeemed ${coinCost} ReLoop Coins for ${redeemedItemName}.`,
+            color: '#10B981',
+            icon: 'gift',
+            timestamp: new Date()
+        });
+        res.json({
+            success: true,
+            message: 'Coins redeemed successfully!',
+            redemption,
+            availableCoins: wallet.availableCoins,
+            voucherCode,
+            pin
+        });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });

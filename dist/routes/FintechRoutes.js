@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticateToken, requireFinanceOrSuperAdmin } from '../middleware/SecurityAuth.js';
-import { getWalletHistory, saveBankDetails, requestPayout, handleWebhook, getTransactions, getInvoices, adminApproveReward, adminApprovePayout, adminGetPayouts, adminGetRewards, adminGetUsers, adminGetCompanies, adminGetInvoices, companyCreateCampaign, companyGetCampaigns, adminUpdateKyc, adminGetUserById, adminSendMoney, adminGetPickups, adminUpdatePickupStatus, adminCreateCompany } from '../controllers/FintechController.js';
+import { getWalletHistory, saveBankDetails, requestPayout, handleWebhook, getTransactions, getInvoices, adminApproveReward, adminApprovePayout, adminGetPayouts, adminGetRewards, adminGetUsers, adminGetCompanies, adminGetInvoices, companyCreateCampaign, companyGetCampaigns, adminUpdateKyc, adminGetUserById, adminSendMoney, adminGetPickups, adminUpdatePickupStatus, adminCreateCompany, getRedemptionStore, redeemCoins } from '../controllers/FintechController.js';
 import { getDashboardStats, getGrowthData } from '../controllers/AdminAnalyticsController.js';
 const router = express.Router();
 // ─── USER ROUTES ─────────────────────────────────────────────────────────────
@@ -9,6 +9,8 @@ router.get('/transactions', authenticateToken, getTransactions);
 router.get('/invoices', authenticateToken, getInvoices);
 router.post('/payouts/request', authenticateToken, requestPayout);
 router.put('/bank-details', authenticateToken, saveBankDetails);
+router.get('/wallet/redemption-store', authenticateToken, getRedemptionStore);
+router.post('/wallet/redeem', authenticateToken, redeemCoins);
 // ─── COMPANY ROUTES ──────────────────────────────────────────────────────────
 router.post('/company/campaign', authenticateToken, companyCreateCampaign);
 router.get('/company/campaign', authenticateToken, companyGetCampaigns);

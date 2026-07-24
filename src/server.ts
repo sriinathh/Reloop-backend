@@ -25,7 +25,7 @@ import {
 import { initializeSocketTracking } from './services/ExternalServices.js';
 import {
   WasteCategory, Badge, Challenge, LanguageTranslation,
-  User, Profile, Kyc, Wallet
+  User, Profile, Kyc, Wallet, GiftCard, Coupon
 } from './models/Schemas.js';
 import {
   DEFAULT_WASTE_CATEGORIES,
@@ -132,6 +132,29 @@ const seedDatabase = async () => {
       console.log('[Seeding] Language Translations seeded successfully');
     }
 
+    // 4a. Seed Gift Cards
+    const gcCount = await GiftCard.countDocuments();
+    if (gcCount === 0) {
+      await GiftCard.insertMany([
+        { brandName: 'Amazon Pay', voucherCode: 'AMZ-COIN-WALLET-98231', pin: '9841', coinCost: 500, status: 'Available' },
+        { brandName: 'Amazon Pay', voucherCode: 'AMZ-COIN-WALLET-54812', pin: '1432', coinCost: 1000, status: 'Available' },
+        { brandName: 'Starbucks', voucherCode: 'SBUX-COIN-WALLET-12492', pin: '8872', coinCost: 300, status: 'Available' },
+        { brandName: 'Myntra Shopping', voucherCode: 'MYN-COIN-WALLET-48201', pin: '5401', coinCost: 750, status: 'Available' }
+      ]);
+      console.log('[Seeding] Gift Cards seeded successfully');
+    }
+
+    // 4b. Seed Coupons
+    const couponCount = await Coupon.countDocuments();
+    if (couponCount === 0) {
+      await Coupon.insertMany([
+        { brandName: 'Swiggy Food', discountCode: 'SWIGGY150', coinCost: 150, expiryDate: new Date(Date.now() + 30 * 86400000), status: 'Available' },
+        { brandName: 'Zomato Pro', discountCode: 'ZOMATO200', coinCost: 200, expiryDate: new Date(Date.now() + 60 * 86400000), status: 'Available' },
+        { brandName: 'Uber Rides', discountCode: 'UBERFREE50', coinCost: 100, expiryDate: new Date(Date.now() + 15 * 86400000), status: 'Available' }
+      ]);
+      console.log('[Seeding] Coupons seeded successfully');
+    }
+
     // 5. Seed default test customer if empty
     // 5. Seed default test customer with valid bcrypt password
     const testPasswordHash = await bcrypt.hash('password', 10);
@@ -153,7 +176,12 @@ const seedDatabase = async () => {
         user: testUser._id,
         balance: 1500,
         ecoPoints: 450,
-        level: 1
+        level: 1,
+        availableCoins: 15000,
+        lifetimeCoins: 15000,
+        coinsEarned: 15000,
+        coinsRedeemed: 0,
+        totalRewards: 1500
       });
       await Kyc.create({
         user: testUser._id,

@@ -8,7 +8,7 @@ import {
   User, Profile, Kyc, Wallet, WalletTransaction,
   Pickup, WasteCategory, Badge, Challenge,
   Notification, AiScan, AiChat, LanguageTranslation,
-  CommunityPost, Address, Withdrawal, Leaderboard,
+  CommunityPost, Address, Withdrawal, Leaderboard, Payout,
   Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog
 } from '../models/Schemas.js';
 import {
@@ -66,7 +66,17 @@ router.post('/auth/register', async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
       const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
-      await Wallet.create({ user: user._id, balance: 0, ecoPoints: 0, level: 1 });
+      await Wallet.create({
+        user: user._id,
+        balance: 0,
+        ecoPoints: 0,
+        level: 1,
+        availableCoins: 0,
+        lifetimeCoins: 0,
+        coinsEarned: 0,
+        coinsRedeemed: 0,
+        totalRewards: 0
+      });
       await Kyc.create({ user: user._id, status: 'Pending' });
 
       userId = user._id.toString();
@@ -231,9 +241,10 @@ router.post('/auth/google', async (req, res) => {
     }
 
     let userIdStr: string;
+    let user: any = null;
 
     if (useSqlite()) {
-      let user = await sqliteFindUserByEmail(email);
+      user = await sqliteFindUserByEmail(email);
       if (!user) {
         userIdStr = 'u_' + Math.floor(100000 + Math.random() * 900000);
         const googleId = idToken ? idToken.slice(-30) : 'g_' + Math.floor(100000 + Math.random() * 900000);
@@ -241,7 +252,7 @@ router.post('/auth/google', async (req, res) => {
       }
       userIdStr = user.id;
     } else {
-      let user = await User.findOne({ email });
+      user = await User.findOne({ email });
       if (!user) {
         user = await User.create({
           email,
@@ -465,7 +476,7 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// ─── 5. PROFILE ROUTER (/api/profile, /api/user-profile) ──────────────────────
+// ─── 5. PROFILE ROUTER (/api/profile) ──────────────────────
 const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
   try {
     const userId = req.userId || '605c72d6248c89423c7b2a75';
@@ -474,16 +485,59 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
     if (useSqlite()) {
       profile = await sqliteGetUserProfile(userId);
     } else {
-      const p = await Profile.findOne({ user: userId }).lean();
-      const w = await Wallet.findOne({ user: userId }).lean();
+      let p = await Profile.findOne({ user: userId });
+      let w = await Wallet.findOne({ user: userId });
+      const u = await User.findById(userId);
+
+      if (!p && u) {
+        p = await Profile.create({
+          user: userId,
+          name: 'New User',
+          avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+          languages: ['English'],
+          address: '',
+          dob: '',
+          gender: 'Other',
+          aadhaarNumber: '',
+          panNumber: ''
+        });
+      }
+
+      if (!w && u) {
+        w = await Wallet.create({
+          user: userId,
+          balance: 0,
+          ecoPoints: 0,
+          level: 1,
+          availableCoins: 0,
+          lifetimeCoins: 0,
+          coinsEarned: 0,
+          coinsRedeemed: 0,
+          totalRewards: 0
+        });
+      }
+
       if (p) {
         profile = {
-          ...p,
-          ecoPoints: w?.ecoPoints || 450,
-          balance: w?.balance || 1500,
+          ...p.toObject(),
+          email: u?.email || '',
+          phone: u?.phone || '',
+          ecoPoints: w?.ecoPoints || 0,
+          balance: w?.balance || 0,
           level: w?.level || 1,
+          availableCoins: w?.availableCoins || 0,
+          lifetimeCoins: w?.lifetimeCoins || 0,
+          coinsEarned: w?.coinsEarned || 0,
+          coinsRedeemed: w?.coinsRedeemed || 0,
+          totalRewards: w?.totalRewards || 0,
           aadhaarVerified: true,
-          accountNumber: w?.accountNumber || ''
+          accountNumber: w?.accountNumber || '',
+          ifscCode: w?.ifscCode || '',
+          bankName: w?.bankName || '',
+          accountHolderName: w?.accountHolderName || '',
+          branch: w?.branch || '',
+          upiId: w?.upiId || '',
+          upiQrUrl: w?.upiQrUrl || ''
         };
       }
     }
@@ -506,18 +560,18 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
   }
 };
 
-router.get('/profile', authenticateToken, handleGetProfile);
-router.get('/user-profile', authenticateToken, handleGetProfile);
-
 const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
   try {
     const userId = req.userId || '605c72d6248c89423c7b2a75';
-    const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url } = req.body;
+    const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch } = req.body;
 
     let updateData: any = {};
     if (name) updateData.name = name;
     if (aadhaar_number) updateData.aadhaarNumber = aadhaar_number;
     if (pan_number) updateData.panNumber = pan_number;
+    if (address) updateData.address = address;
+    if (dob) updateData.dob = dob;
+    if (gender) updateData.gender = gender;
     
     let avatarUrl = undefined;
     if (profile_image) {
@@ -542,23 +596,32 @@ const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
       }
       
       let walletUpdate: any = {};
+      let walletUnset: any = {};
       if (account_number) walletUpdate.accountNumber = account_number;
       if (ifsc_code) walletUpdate.ifscCode = ifsc_code;
       if (bank_name) walletUpdate.bankName = bank_name;
       if (upi_id) walletUpdate.upiId = upi_id;
+      if (account_holder_name) walletUpdate.accountHolderName = account_holder_name;
+      if (branch) walletUpdate.branch = branch;
       
       if (upi_qr_url) {
-        if (upi_qr_url.startsWith('data:image')) {
+        if (upi_qr_url === 'DELETE') {
+          walletUnset.upiQrUrl = 1;
+        } else if (upi_qr_url.startsWith('data:image')) {
           walletUpdate.upiQrUrl = await uploadToCloudinary(upi_qr_url, 'qrcodes');
         } else {
           walletUpdate.upiQrUrl = upi_qr_url;
         }
       }
       
-      if (Object.keys(walletUpdate).length > 0) {
+      if (Object.keys(walletUpdate).length > 0 || Object.keys(walletUnset).length > 0) {
+        const updateObj: any = {};
+        if (Object.keys(walletUpdate).length > 0) updateObj.$set = walletUpdate;
+        if (Object.keys(walletUnset).length > 0) updateObj.$unset = walletUnset;
+        
         await Wallet.findOneAndUpdate(
           { user: userId },
-          walletUpdate,
+          updateObj,
           { new: true, upsert: true }
         );
       }
@@ -576,12 +639,19 @@ const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
           ...p,
           email: u?.email || '',
           phone: u?.phone || '',
-          ecoPoints: w?.ecoPoints || 450,
-          balance: w?.balance || 1500,
+          ecoPoints: w?.ecoPoints || 0,
+          balance: w?.balance || 0,
           level: w?.level || 1,
+          availableCoins: w?.availableCoins || 0,
+          lifetimeCoins: w?.lifetimeCoins || 0,
+          coinsEarned: w?.coinsEarned || 0,
+          coinsRedeemed: w?.coinsRedeemed || 0,
+          totalRewards: w?.totalRewards || 0,
           accountNumber: w?.accountNumber || '',
           ifscCode: w?.ifscCode || '',
           bankName: w?.bankName || '',
+          accountHolderName: w?.accountHolderName || '',
+          branch: w?.branch || '',
           upiId: w?.upiId || '',
           upiQrUrl: w?.upiQrUrl || ''
         };
@@ -594,8 +664,14 @@ const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
   }
 };
 
+router.get('/profile', authenticateToken, handleGetProfile);
 router.put('/profile', authenticateToken, handleUpdateProfile);
-router.put('/user-profile', authenticateToken, handleUpdateProfile);
+router.put('/profile/payment', authenticateToken, handleUpdateProfile);
+router.post('/profile/upload-qr', authenticateToken, handleUpdateProfile);
+router.delete('/profile/qr', authenticateToken, async (req: AuthRequest, res: express.Response) => {
+  req.body.upi_qr_url = 'DELETE';
+  await handleUpdateProfile(req, res);
+});
 
 // ─── BANK DETAILS ROUTER (/api/bank-details, /api/bank) ──────────────────────
 const handleGetBankDetails = async (req: AuthRequest, res: express.Response) => {
