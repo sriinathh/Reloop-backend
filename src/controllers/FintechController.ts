@@ -111,6 +111,19 @@ export const requestPayout = async (req: AuthRequest, res: Response) => {
       }
     });
 
+    wallet.balance -= amount;
+    await wallet.save();
+
+    await WalletTransaction.create({
+      wallet: wallet._id,
+      user: userId,
+      type: 'withdrawal',
+      amount: amount,
+      status: 'pending',
+      description: `Withdrawal Request via ${payout.method}`,
+      referenceId: payout._id.toString()
+    });
+
     res.json({ success: true, message: 'Payout requested successfully', payout });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
