@@ -847,6 +847,16 @@ router.post('/payouts/request', authenticateToken, async (req: AuthRequest, res)
         }
       });
 
+      await WalletTransaction.create({
+        wallet: wallet._id,
+        user: userId,
+        type: 'withdrawal',
+        amount: -amount,
+        status: 'pending',
+        description: `Withdrawal request via ${method || 'UPI'}`,
+        referenceId: payout._id.toString()
+      });
+
       return res.json({ success: true, payout });
     }
 

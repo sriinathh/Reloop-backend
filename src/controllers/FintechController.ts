@@ -296,8 +296,41 @@ export const adminUpdatePickupStatus = async (req: Request, res: Response) => {
     const pickup = await mongoose.model('Pickup').findById(id);
     if (!pickup) return res.status(404).json({ success: false, message: 'Pickup not found' });
     
+    const previousStatus = pickup.status;
     if (status) pickup.status = status;
     if (partnerId) pickup.assignedPartner = partnerId;
+    
+    if (status === 'completed' && previousStatus !== 'completed') {
+      const amount = pickup.actualPrice || pickup.estimatedPrice || 0;
+      if (amount > 0) {
+        let wallet = await mongoose.model('Wallet').findOne({ user: pickup.user });
+        if (!wallet) {
+          wallet = await mongoose.model('Wallet').create({
+            user: pickup.user,
+            balance: 0,
+            ecoPoints: 0,
+            level: 1,
+            availableCoins: 0,
+            lifetimeCoins: 0,
+            coinsEarned: 0,
+            coinsRedeemed: 0,
+            totalRewards: 0
+          });
+        }
+        wallet.balance += amount;
+        
+        await wallet.save();
+
+        await mongoose.model('WalletTransaction').create({
+          wallet: wallet._id,
+          user: pickup.user,
+          type: 'credit',
+          amount: amount,
+          status: 'completed',
+          description: `Recycling earnings - ${pickup.wasteCategoryName || 'Pickup'}`
+        });
+      }
+    }
     
     await pickup.save();
     res.json({ success: true, pickup });
