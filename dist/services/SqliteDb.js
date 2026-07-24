@@ -1,10 +1,10 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import path from 'path';
 let dbInstance = null;
 export const getSqliteDb = async () => {
     if (dbInstance)
         return dbInstance;
+    const sqlite3 = await import('sqlite3').then((m) => m.default || m);
+    const { open } = await import('sqlite');
     const dbPath = path.resolve(process.cwd(), 'reloop.db');
     dbInstance = await open({
         filename: dbPath,
