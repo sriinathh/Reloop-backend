@@ -15,7 +15,10 @@ import {
   approvePayout,
   getRewards,
   approveReward,
-  downloadInvoice
+  downloadInvoice,
+  getSystemHealth,
+  getLiveMonitoringStats,
+  getDetailedAnalytics
 } from '../controllers/adminController.js';
 
 const router = express.Router();
@@ -24,6 +27,9 @@ const router = express.Router();
 // In production, requireAdmin middleware would be used here.
 
 router.get('/stats', getDashboardStats);
+router.get('/stats/live', getLiveMonitoringStats);
+router.get('/analytics', getDetailedAnalytics);
+router.get('/system-health', getSystemHealth);
 router.get('/growth', getPlatformGrowth);
 router.get('/users', getUsers);
 router.get('/users/:id', getUserDetails);

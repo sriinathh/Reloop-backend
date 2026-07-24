@@ -54,14 +54,14 @@ router.post('/auth/register', async (req, res) => {
 
     if (useSqlite()) {
       const existing = await sqliteFindUserByEmail(email);
-      if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
+      if (existing) return res.status(409).json({ success: false, message: 'User already exists' });
 
       const hashedPassword = await bcrypt.hash(password, 10);
       userId = 'u_' + Math.floor(100000 + Math.random() * 900000);
       await sqliteCreateUser({ id: userId, email, name, password: hashedPassword, phone });
     } else {
       const existing = await User.findOne({ email });
-      if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
+      if (existing) return res.status(409).json({ success: false, message: 'User already exists' });
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
@@ -223,6 +223,17 @@ router.post('/auth/otp/send', async (req, res) => {
   if (!target) return res.status(400).json({ success: false, message: 'Email or phone is required' });
 
   try {
+    let existing;
+    if (useSqlite()) {
+      existing = await sqliteFindUserByEmail(email);
+    } else {
+      existing = await User.findOne({ email });
+    }
+    
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'User already exists' });
+    }
+
     const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const expiresAt = Date.now() + 10 * 60 * 1000;
     resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
