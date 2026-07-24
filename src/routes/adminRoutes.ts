@@ -14,7 +14,8 @@ import {
   getPayouts,
   approvePayout,
   getRewards,
-  approveReward
+  approveReward,
+  downloadInvoice
 } from '../controllers/adminController.js';
 
 const router = express.Router();
@@ -33,6 +34,7 @@ router.post('/companies', createCompany);
 router.get('/campaigns', getCampaigns);
 router.get('/pickups', getPickups);
 router.get('/invoices', getInvoices);
+router.get('/invoices/:id/download', downloadInvoice);
 router.get('/payouts', getPayouts);
 router.post('/payouts/:id/approve', approvePayout);
 router.get('/rewards', getRewards);

@@ -114,7 +114,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<{
     const mistralApiKey = process.env.MISTRAL_API_KEY || '';
     // Development fallback if key not configured
     if (!mistralApiKey) {
-      const classes = ['Plastic', 'Glass', 'Paper', 'Metal', 'E-Waste', 'Cardboard'];
+      const classes = ['Plastic', 'Glass', 'Paper', 'Metal', 'Copper', 'Aluminum', 'Iron/Steel', 'E-Waste', 'Cardboard', 'Textile', 'Rubber'];
       const detected = classes[Math.floor(Math.random() * classes.length)];
       return {
         detectedClass: detected,
@@ -139,7 +139,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<{
           {
             role: 'user',
             content: [
-              { type: 'text', text: 'Identify this object, absolutely any object in the world. Determine if it is recyclable. If it is recyclable, map it to one of these categories: Plastic, Glass, Paper, Metal, Electronic, Cardboard. If it is not recyclable (e.g. food, organic waste, furniture, hazardous), set the category strictly to "Non-Recyclable". Estimate weight in kg, estimate price in INR (0 if not recyclable), give a confidence score (0-1), and 3 tips. Return strictly JSON: {"name": "...", "category": "...", "weight": 2.5, "price": 40, "confidence": 0.95, "tips": ["...", "..."]}' },
+              { type: 'text', text: 'Identify this object, absolutely any object in the world. Determine if it is recyclable scrap material. Map it strictly to one of these scrap categories: Plastic, Glass, Paper, Copper, Aluminum, Iron/Steel, Mixed Metal, E-Waste, Cardboard, Textile, Rubber. If it is not recyclable (e.g. food, organic waste, furniture, hazardous), set the category strictly to "Non-Recyclable". Estimate weight in kg, estimate price in INR based on current scrap rates (0 if not recyclable), give a confidence score (0-1), and 3 tips. Return strictly JSON: {"name": "...", "category": "...", "weight": 2.5, "price": 40, "confidence": 0.95, "tips": ["...", "..."]}' },
               { type: 'image_url', image_url: { url: imageBase64 } }
             ]
           }

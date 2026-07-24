@@ -393,3 +393,52 @@ export const approveReward = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Server Error', error });
   }
 };
+
+export const downloadInvoice = async (req: Request, res: Response) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id).populate('user').populate('payout');
+    if (!invoice) {
+      res.status(404).send('Invoice not found');
+      return;
+    }
+    
+    const html = `
+      <html>
+        <head>
+          <style>
+            body { font-family: sans-serif; padding: 40px; color: #333; }
+            .header { border-bottom: 2px solid #10B981; padding-bottom: 20px; margin-bottom: 20px; }
+            .logo { color: #10B981; font-size: 24px; font-weight: bold; }
+            .title { font-size: 20px; color: #666; }
+            .details { margin-bottom: 30px; }
+            .amount { font-size: 32px; color: #10B981; font-weight: bold; margin: 20px 0; }
+            .footer { margin-top: 50px; font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">ReLoop</div>
+            <div class="title">Payout Invoice</div>
+          </div>
+          <div class="details">
+            <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
+            <p><strong>Date:</strong> ${new Date(invoice.date).toLocaleDateString()}</p>
+            <p><strong>Billed To:</strong> ${(invoice as any).user?.name || 'User'}</p>
+          </div>
+          <div class="amount">
+            Total Amount: ₹${invoice.amount}
+          </div>
+          <div class="footer">
+            This is an automatically generated invoice for payout processing.
+          </div>
+        </body>
+      </html>
+    `;
+    
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Content-Disposition', \`attachment; filename="invoice-\${invoice.invoiceNumber}.html"\`);
+    res.send(html);
+  } catch (error) {
+    res.status(500).send('Server Error');
+  }
+};
