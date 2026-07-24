@@ -216,6 +216,57 @@ router.post('/auth/reset-password', async (req, res) => {
   }
 });
 
+// REGISTRATION OTP SEND
+router.post('/auth/otp/send', async (req, res) => {
+  const { phone, email } = req.body;
+  const target = (email || phone || '').toLowerCase().trim();
+  if (!target) return res.status(400).json({ success: false, message: 'Email or phone is required' });
+
+  try {
+    const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
+
+    if (email) {
+      await sendEmail(email, 'ReLoop Registration OTP', emailTemplates.otp(dynamicOtp));
+    }
+
+    console.log(`\n======================================================`);
+    console.log(`[REGISTRATION OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
+    console.log(`======================================================\n`);
+
+    res.json({
+      success: true,
+      message: `Verification OTP code sent to ${target}.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// REGISTRATION OTP VERIFY
+router.post('/auth/otp/verify', async (req, res) => {
+  const { phone, email, otp } = req.body;
+  const target = (email || phone || '').toLowerCase().trim();
+
+  if (!target || !otp) {
+    return res.status(400).json({ success: false, message: 'Email/phone and OTP are required' });
+  }
+
+  const storedData = resetOtpStore.get(target);
+  const isValidOtp = storedData && storedData.otp === String(otp).trim() && Date.now() <= storedData.expiresAt;
+
+  if (!isValidOtp) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or expired OTP code.'
+    });
+  }
+
+  resetOtpStore.delete(target);
+  res.json({ success: true, message: 'OTP verified successfully' });
+});
+
 router.post('/auth/google', async (req, res) => {
   try {
     const { idToken, email: clientEmail, name: clientName, photoUrl: clientPhoto } = req.body;
