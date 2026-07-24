@@ -9,7 +9,7 @@ import {
   Pickup, WasteCategory, Badge, Challenge,
   Notification, AiScan, AiChat, LanguageTranslation,
   CommunityPost, Address, Withdrawal, Leaderboard, Payout,
-  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog
+  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog, ScrapListing
 } from '../models/Schemas.js';
 import {
   authenticateToken, AuthRequest, generateAccessToken,
@@ -568,7 +568,7 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
       if (!w && u) {
         w = await Wallet.create({
           user: userId,
-          balance: 0,
+          balance: 500, // Test amount
           ecoPoints: 0,
           level: 1,
           availableCoins: 0,
@@ -577,6 +577,9 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
           coinsRedeemed: 0,
           totalRewards: 0
         });
+      } else if (w && w.balance === 0) {
+        w.balance = 500;
+        await w.save();
       }
 
       if (p) {
@@ -586,6 +589,7 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
           phone: u?.phone || '',
           ecoPoints: w?.ecoPoints || 0,
           balance: w?.balance || 0,
+          walletBalance: w?.balance || 0,
           level: w?.level || 1,
           availableCoins: w?.availableCoins || 0,
           lifetimeCoins: w?.lifetimeCoins || 0,
@@ -1258,23 +1262,113 @@ router.get('/community/posts', async (req, res) => {
 });
 
 // ─── 13. REWARDS & CHALLENGES (/api/rewards, /api/challenges, /api/badges) ────
-router.get('/badges', async (req, res) => {
-  res.json([
-    { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1 },
-    { id: 'b2', name: 'Planet Saver', description: 'Save more than 50 kg of carbon emissions', icon: 'earth', color: '#3B82F6', threshold: 50 }
-  ]);
+router.get('/badges', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (!useSqlite()) {
+      // Return earned and unearned badges based on user's ecoPoints
+      const badges = await Badge.find();
+      const wallet = await Wallet.findOne({ user: req.userId });
+      const ecoPoints = wallet?.ecoPoints || 0;
+      
+      const mappedBadges = badges.map(b => ({
+        id: b._id.toString(),
+        name: b.name,
+        description: b.description,
+        icon: b.icon || 'leaf',
+        color: b.color || '#10B981',
+        threshold: b.threshold,
+        earned: ecoPoints >= b.threshold
+      }));
+      return res.json(mappedBadges);
+    }
+    res.json([
+      { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1, earned: true },
+      { id: 'b2', name: 'Planet Saver', description: 'Save more than 50 kg of carbon emissions', icon: 'earth', color: '#3B82F6', threshold: 50, earned: false }
+    ]);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
-router.get('/rewards/badges', async (req, res) => {
-  res.json([
-    { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1 }
-  ]);
+router.get('/rewards/badges', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (!useSqlite()) {
+      const badges = await Badge.find();
+      const wallet = await Wallet.findOne({ user: req.userId });
+      const ecoPoints = wallet?.ecoPoints || 0;
+      
+      const earnedBadges = badges.filter(b => ecoPoints >= b.threshold).map(b => ({
+        id: b._id.toString(),
+        name: b.name,
+        description: b.description,
+        icon: b.icon || 'leaf',
+        color: b.color || '#10B981',
+        threshold: b.threshold,
+        earned: true
+      }));
+      return res.json(earnedBadges);
+    }
+    res.json([
+      { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1, earned: true }
+    ]);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
-router.get('/challenges', async (req, res) => {
-  res.json([
-    { id: 'c1', title: 'Summer Cleanup', description: 'Recycle 20 kg of paper waste this summer', targetKg: 20, currentKg: 5, rewardPoints: 200, icon: 'newspaper', color: '#F59E0B', endsAt: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), isActive: true }
-  ]);
+router.get('/challenges', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (!useSqlite()) {
+      const challenges = await Challenge.find({ isActive: true });
+      return res.json(challenges.map(c => ({
+        id: c._id.toString(),
+        title: c.title,
+        description: c.description,
+        targetKg: c.targetKg,
+        currentKg: Math.floor(Math.random() * c.targetKg), // Mock progress for now
+        rewardPoints: c.rewardPoints,
+        icon: c.icon || 'star',
+        color: c.color || '#F59E0B',
+        endsAt: c.endsAt || new Date(Date.now() + 15 * 86400000),
+        isActive: c.isActive
+      })));
+    }
+    res.json([
+      { id: 'c1', title: 'Summer Cleanup', description: 'Recycle 20 kg of paper waste this summer', targetKg: 20, currentKg: 5, rewardPoints: 200, icon: 'newspaper', color: '#F59E0B', endsAt: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), isActive: true }
+    ]);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ─── 13.5 LEADERBOARD ──────────────────────────────────────────────────────────
+router.get('/leaderboard', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (!useSqlite()) {
+      const wallets = await Wallet.find().sort({ ecoPoints: -1 }).limit(20).lean();
+      const leaderboard = await Promise.all(wallets.map(async (w: any, index) => {
+        const profile = await Profile.findOne({ user: w.user }).lean();
+        const name = profile?.name || 'Unknown User';
+        const initials = name.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
+        return {
+          id: w.user.toString(),
+          user_name: name,
+          avatar: initials,
+          total_points: w.ecoPoints || 0,
+          pickups_count: 0,
+          co2_saved_kg: 0,
+          rank: index + 1
+        };
+      }));
+      return res.json(leaderboard);
+    }
+    res.json([
+      { id: '1', user_name: 'Aarav Sharma', avatar: 'AS', total_points: 4500, pickups_count: 24, co2_saved_kg: 120, rank: 1 },
+      { id: '2', user_name: 'Diya Patel', avatar: 'DP', total_points: 3200, pickups_count: 18, co2_saved_kg: 85, rank: 2 }
+    ]);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 // ─── 14. LANGUAGES (/api/languages) ──────────────────────────────────────────
@@ -1298,6 +1392,97 @@ router.get('/help', async (req, res) => {
 
 router.post('/support/ticket', authenticateToken, async (req: AuthRequest, res) => {
   res.status(201).json({ success: true, message: 'Support ticket submitted successfully' });
+});
+
+// ─── 15.5 WALLET REDEMPTION (/api/wallet/redemption-store, /api/wallet/redeem)
+router.get('/wallet/redemption-store', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const giftCards = [
+      { id: 'gc1', name: 'Amazon Pay Gift Card', value: '₹500', coinCost: 5000, color: '#FF9900', bg: '#FFF7ED', icon: 'shopping-bag' },
+      { id: 'gc2', name: 'Flipkart Gift Voucher', value: '₹250', coinCost: 2500, color: '#2874F0', bg: '#EFF6FF', icon: 'shopping-bag' }
+    ];
+    const coupons = [
+      { id: 'cp1', name: 'Myntra 20% OFF', value: 'Up to ₹500', coinCost: 1000, color: '#E11D48', bg: '#FFF1F2', icon: 'tag' }
+    ];
+    const otherOffers = [
+      { id: 'ot1', name: 'Plant 1 Tree', value: 'Save Nature', coinCost: 1500, color: '#16A34A', bg: '#F0FDF4', icon: 'leaf' }
+    ];
+    res.json({ giftCards, coupons, otherOffers });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/wallet/redeem', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { category, itemId, itemDetails } = req.body;
+    // In a real app, deduct ecoPoints from the user's profile and create a Redemption record.
+    res.json({ 
+      success: true, 
+      voucherCode: 'RL-' + Math.random().toString(36).substring(7).toUpperCase(),
+      pin: Math.floor(1000 + Math.random() * 9000).toString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ─── 16. PICKUPS CANCEL ────────────────────────────────────────────────────────
+router.post('/pickups/:id/cancel', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+    
+    if (!useSqlite()) {
+      const pickup = await Pickup.findOneAndUpdate(
+        { _id: id, user: userId, status: { $in: ['pending', 'accepted'] } },
+        { status: 'cancelled' },
+        { new: true }
+      );
+      if (!pickup) return res.status(404).json({ success: false, message: 'Pickup not found or cannot be cancelled' });
+      return res.json({ success: true, pickup });
+    }
+    
+    res.json({ success: true, message: 'Pickup cancelled (mock)' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ─── 17. MARKETPLACE LISTINGS ──────────────────────────────────────────────────
+router.get('/marketplace', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (!useSqlite()) {
+      const listings = await ScrapListing.find({ status: 'Active' }).sort({ createdAt: -1 });
+      return res.json(listings);
+    }
+    res.json([
+      { _id: '1', title: 'Bulk Industrial Cardboard', category: 'Industrial', weightKg: 250, pricePerKg: 14, location: 'Mumbai', sellerName: 'Reliable Hub', phone: '+919876543210', isVerified: true, postedAgo: '2 hours ago' }
+    ]);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/marketplace', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { title, category, weightKg, pricePerKg, location, phone } = req.body;
+    let sellerName = 'Verified User';
+    
+    if (!useSqlite()) {
+      const profile = await Profile.findOne({ user: req.userId });
+      if (profile) sellerName = profile.name;
+      
+      const newListing = await ScrapListing.create({
+        title, category, weightKg, pricePerKg, location, phone, sellerName, isVerified: true, status: 'Active'
+      });
+      return res.status(201).json(newListing);
+    }
+    
+    res.status(201).json({ id: Date.now().toString(), title, category, weightKg, pricePerKg, location, sellerName, phone, isVerified: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 export default router;

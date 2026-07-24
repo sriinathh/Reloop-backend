@@ -1030,3 +1030,32 @@ const CouponSchema = new Schema<ICoupon>({
 });
 
 export const Coupon = mongoose.model<ICoupon>('Coupon', CouponSchema);
+
+// ─── 30. MARKETPLACE SCRAP LISTING SCHEMA ──────────────────────────────────────
+export interface IScrapListing extends Document {
+  title: string;
+  category: string;
+  weightKg: number;
+  pricePerKg: number;
+  location: string;
+  sellerName: string;
+  phone: string;
+  isVerified: boolean;
+  status: 'Active' | 'Sold' | 'Archived';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const ScrapListingSchema = new Schema<IScrapListing>({
+  title: { type: String, required: true },
+  category: { type: String, required: true },
+  weightKg: { type: Number, required: true },
+  pricePerKg: { type: Number, required: true },
+  location: { type: String, required: true },
+  sellerName: { type: String, required: true },
+  phone: { type: String, required: true },
+  isVerified: { type: Boolean, default: false },
+  status: { type: String, enum: ['Active', 'Sold', 'Archived'], default: 'Active' },
+}, { timestamps: true });
+
+export const ScrapListing = mongoose.model<IScrapListing>('ScrapListing', ScrapListingSchema);
