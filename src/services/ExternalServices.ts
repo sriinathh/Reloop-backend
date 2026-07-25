@@ -102,71 +102,144 @@ export const emailTemplates = {
 // ─── MISTRAL AI API SERVICE ──────────────────────────────────────────────────
 // Custom prompt enforces chatbot remains as "ReLoop AI" and never mentions Mistral.
 
-export const analyzeWasteImage = async (imageBase64: string): Promise<{
+import { MaterialPrice } from '../models/Schemas.js';
+
+export interface IAiScanResult {
+  object: string;
+  category: string;
+  material: string;
+  confidence: number;
+  estimatedWeight: string;
+  pricePerKg: number;
+  estimatedReward: number;
+  rlCoins: number;
+  recyclable: boolean;
+  pickupAvailable: boolean;
+  suggestions: string[];
+  // Keep backward compatibility fields
   detectedClass: string;
   detectedName: string;
   estimatedWeightKg: number;
   estimatedPrice: number;
   confidenceScore: number;
-  suggestions: string[];
-}> => {
+}
+
+export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanResult> => {
   try {
     const mistralApiKey = process.env.MISTRAL_API_KEY || '';
-    // Development fallback if key not configured
-    if (!mistralApiKey) {
-      const classes = ["Plastic Waste","Paper & Cardboard Waste","Glass Waste","Metal Waste","Electronic Waste (E-Waste)","Battery Waste","Electrical Appliances","Textile & Clothing Waste","Organic / Food Waste","Garden & Green Waste","Wood & Timber Waste","Rubber Waste","Construction & Demolition Waste","Automobile Scrap","Medical Waste","Hazardous Waste","Industrial Scrap","Household Mixed Waste","Non-Recyclable Waste","Used Cooking Oil","Ink & Toner Cartridges","CDs","DVDs & Optical Media","Furniture Waste","Leather Waste","Footwear Waste","Packaging Waste","Beverage Containers","Kitchen Waste","Office Waste","School & Educational Waste","Agricultural Waste","Marine & Fishing Waste","Cable & Wire Scrap","Pipe & PVC Waste","Aluminum Scrap","Copper Scrap","Brass Scrap","Stainless Steel Scrap","Iron & Mild Steel Scrap","Tin Scrap","Lead Scrap","Zinc Scrap","Precious Metal Scrap","Fabric & Upholstery Waste","Foam & Thermocol Waste","Ceramic Waste","Stone & Marble Waste","Paint & Chemical Containers","Lighting Waste (Bulbs","CFL","LED)","Refrigeration & Cooling Equipment","Air Conditioner Scrap","Mobile Phone Scrap","Laptop & Computer Scrap","Television & Display Scrap","Printer & Scanner Scrap","Networking Equipment","Smart Devices & IoT Waste","Solar Panel Waste","EV Battery Waste","Tyres & Tubes","Glass Fiber Waste","Composite Material Waste","Biohazard Waste","Pharmaceutical Waste","Cosmetic & Personal Care Packaging","Pet Waste Accessories","Festival Decoration Waste","Sports Equipment Waste","Musical Instrument Waste","Toys & Children's Products","Home Decor Waste","Jewelry Scrap","Watch & Clock Scrap","Luggage & Travel Accessories","Mattress & Bedding Waste","Carpets & Rugs","Curtains & Blinds","Plastic Furniture","Metal Furniture","Wooden Furniture","Bicycle Scrap","Motorcycle Parts","Car Parts","Industrial Machinery Scrap","Factory Production Waste","Warehouse Packaging Waste","Retail Store Waste","Restaurant & Hotel Waste","Hospital Equipment Waste","Laboratory Equipment Waste","Airport & Railway Waste","Smart Bin Waste","Reusable Materials","Upcyclable Materials","Compostable Waste","Recyclable Waste","Donation & Reuse Items","Bulk Scrap Collection","Mixed Recyclables","Other Waste"];
-      const detected = classes[Math.floor(Math.random() * classes.length)];
-      return {
-        detectedClass: detected,
-        detectedName: `Sample ${detected} Object`,
-        estimatedWeightKg: parseFloat((1 + Math.random() * 5).toFixed(1)),
-        estimatedPrice: Math.floor(10 + Math.random() * 90),
-        confidenceScore: parseFloat((0.85 + Math.random() * 0.14).toFixed(2)),
-        suggestions: [`Sort this ${detected} item separately`, 'Ensure it is clean and dry', 'Schedule a smart pickup now']
+    let parsedResult = {
+      object: 'Plastic Bottle',
+      category: 'Plastic',
+      material: 'PET',
+      confidence: 0.98,
+      estimatedWeight: 1.2,
+      tips: ['Sort plastic separately', 'Clean and dry before scanning', 'Schedule a smart pickup now']
+    };
+
+    if (mistralApiKey) {
+      // Call Mistral API for vision-based classification
+      const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${mistralApiKey}`
+        },
+        body: JSON.stringify({
+          model: 'pixtral-12b-2409',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Identify this object. Determine if it is recyclable scrap material. Analyze it hierarchically: 1. Main Category (e.g. Plastic, Paper, Glass, Metal, E-Waste, Non-Recyclable). 2. Specific Object name. 3. Material type (e.g. PET, HDPE, Cardboard, Copper, Aluminum, Glass, E-Waste). 4. Estimate weight in kg. Return strictly JSON matching: {"object": "Plastic Bottle", "category": "Plastic", "material": "PET", "confidence": 0.98, "estimatedWeight": 1.2, "tips": ["Clean it", "Sort separately", "Schedule pickup"]}' },
+                { type: 'image_url', image_url: { url: imageBase64 } }
+              ]
+            }
+          ],
+          response_format: { type: 'json_object' }
+        })
+      });
+      const data = await response.json() as any;
+      parsedResult = JSON.parse(data.choices[0].message.content);
+    } else {
+      // Development mock fallback with random selections
+      const mocks = [
+        { object: 'Plastic Bottle', category: 'Plastic', material: 'PET', confidence: 0.98, estimatedWeight: 0.45 },
+        { object: 'Copper Wire Bundle', category: 'Metal', material: 'Copper', confidence: 0.95, estimatedWeight: 1.5 },
+        { object: 'Iron Rod Scrap', category: 'Metal', material: 'Iron', confidence: 0.92, estimatedWeight: 5.0 },
+        { object: 'Glass Beer Bottle', category: 'Glass', material: 'Glass', confidence: 0.97, estimatedWeight: 0.6 },
+        { object: 'Cardboard Box', category: 'Paper', material: 'Cardboard', confidence: 0.99, estimatedWeight: 2.2 },
+        { object: 'Dead Keyboard', category: 'Electronics', material: 'E-Waste', confidence: 0.91, estimatedWeight: 0.8 }
+      ];
+      const selected = mocks[Math.floor(Math.random() * mocks.length)];
+      parsedResult = {
+        ...selected,
+        tips: [`Sort this ${selected.category} item separately`, 'Ensure it is dry', 'Book a pickup to earn ReLoop coins']
       };
     }
 
-    // Call Mistral API for vision-based or text-based classification description
-    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${mistralApiKey}`
-      },
-      body: JSON.stringify({
-        model: 'pixtral-12b-2409',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Identify this object, absolutely any object in the world. Determine if it is recyclable scrap material. Map it strictly to one of these scrap categories: Plastic, Glass, Paper, Copper, Aluminum, Iron/Steel, Mixed Metal, E-Waste, Cardboard, Textile, Rubber. If it is not recyclable (e.g. food, organic waste, furniture, hazardous), set the category strictly to "Non-Recyclable". Estimate weight in kg, estimate price in INR based on current scrap rates (0 if not recyclable), give a confidence score (0-1), and 3 tips. Return strictly JSON: {"name": "...", "category": "...", "weight": 2.5, "price": 40, "confidence": 0.95, "tips": ["...", "..."]}' },
-              { type: 'image_url', image_url: { url: imageBase64 } }
-            ]
-          }
-        ],
-        response_format: { type: 'json_object' }
-      })
-    });
-    
-    const data = await response.json() as any;
-    const result = JSON.parse(data.choices[0].message.content);
+    // Dynamic Price Engine Look-up from MaterialPrice collection
+    let pricePerKg = 20; // default fallback (Plastic/PET rate)
+    try {
+      const match = await MaterialPrice.findOne({ 
+        material: { $regex: new RegExp('^' + parsedResult.material + '$', 'i') } 
+      });
+      if (match) {
+        pricePerKg = match.pricePerKg;
+      } else {
+        // Default local pricing map fallback
+        const rateMap: Record<string, number> = {
+          pet: 20, hdpe: 22, copper: 780, iron: 35, aluminum: 90, glass: 4, cardboard: 12, 'e-waste': 50
+        };
+        const key = (parsedResult.material || '').toLowerCase();
+        if (rateMap[key] !== undefined) pricePerKg = rateMap[key];
+      }
+    } catch (e) {
+      console.error('Error looking up MaterialPrice from MongoDB, using fallback:', e);
+    }
+
+    const weightNum = Number(parsedResult.estimatedWeight) || 0.5;
+    const estimatedReward = Math.round(weightNum * pricePerKg);
+    const rlCoins = estimatedReward * 5;
+    const recyclable = parsedResult.category.toLowerCase() !== 'non-recyclable';
+
     return {
-      detectedClass: result.category || 'Mixed Waste',
-      detectedName: result.name || 'Unknown Item',
-      estimatedWeightKg: result.weight || 0,
-      estimatedPrice: result.price || 0,
-      confidenceScore: result.confidence || 0.8,
-      suggestions: result.tips || ['Keep clean']
+      object: parsedResult.object,
+      category: parsedResult.category,
+      material: parsedResult.material,
+      confidence: Math.round((parsedResult.confidence || 0.9) * 100),
+      estimatedWeight: `${weightNum.toFixed(1)}kg`,
+      pricePerKg,
+      estimatedReward,
+      rlCoins,
+      recyclable,
+      pickupAvailable: recyclable,
+      suggestions: parsedResult.tips,
+      // Backward compatibility fields
+      detectedClass: parsedResult.category,
+      detectedName: parsedResult.object,
+      estimatedWeightKg: weightNum,
+      estimatedPrice: estimatedReward,
+      confidenceScore: parsedResult.confidence || 0.9
     };
   } catch (error) {
-    console.error('[Mistral AI Vision Error]:', error);
+    console.error('[AI Vision Error]:', error);
     return {
+      object: 'Plastic Bottle',
+      category: 'Plastic',
+      material: 'PET',
+      confidence: 98,
+      estimatedWeight: '1.2kg',
+      pricePerKg: 20,
+      estimatedReward: 24,
+      rlCoins: 120,
+      recyclable: true,
+      pickupAvailable: true,
+      suggestions: ['Wash and dry before disposal', 'Book a bulk pickup for more points'],
       detectedClass: 'Plastic',
       detectedName: 'Unknown Plastic Item',
-      estimatedWeightKg: 2.0,
+      estimatedWeightKg: 1.2,
       estimatedPrice: 24,
-      confidenceScore: 0.88,
-      suggestions: ['Wash and dry before disposal', 'Book a bulk pickup for more points']
+      confidenceScore: 0.98
     };
   }
 };

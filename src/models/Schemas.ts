@@ -513,6 +513,13 @@ export interface IAiScan extends Document {
   estimatedPrice: number;
   confidenceScore: number;
   suggestions: string[];
+  object?: string;
+  category?: string;
+  material?: string;
+  pricePerKg?: number;
+  rlCoins?: number;
+  recyclable?: boolean;
+  pickupAvailable?: boolean;
   scannedAt: Date;
 }
 
@@ -524,6 +531,13 @@ const AiScanSchema = new Schema<IAiScan>({
   estimatedPrice: { type: Number, required: true },
   confidenceScore: { type: Number, required: true },
   suggestions: { type: [String], default: [] },
+  object: { type: String },
+  category: { type: String },
+  material: { type: String },
+  pricePerKg: { type: Number },
+  rlCoins: { type: Number },
+  recyclable: { type: Boolean, default: true },
+  pickupAvailable: { type: Boolean, default: true },
   scannedAt: { type: Date, default: Date.now }
 });
 
@@ -1059,3 +1073,20 @@ const ScrapListingSchema = new Schema<IScrapListing>({
 }, { timestamps: true });
 
 export const ScrapListing = mongoose.model<IScrapListing>('ScrapListing', ScrapListingSchema);
+
+// ─── 31. MATERIAL PRICE SCHEMA ───────────────────────────────────────────────
+export interface IMaterialPrice extends Document {
+  category: string;
+  material: string;
+  pricePerKg: number;
+  updatedAt: Date;
+}
+
+const MaterialPriceSchema = new Schema<IMaterialPrice>({
+  category: { type: String, required: true },
+  material: { type: String, required: true, unique: true },
+  pricePerKg: { type: Number, required: true },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+export const MaterialPrice = mongoose.model<IMaterialPrice>('MaterialPrice', MaterialPriceSchema);

@@ -381,7 +381,7 @@ export const approvePayout = async (req: Request, res: Response) => {
 
 export const getRewards = async (req: Request, res: Response) => {
   try {
-    const rewards: any[] = []; // Mocked for now
+    const rewards = await Reward.find().populate('user', 'name email').sort({ createdAt: -1 });
     res.json({ success: true, rewards });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server Error', error });
@@ -390,9 +390,67 @@ export const getRewards = async (req: Request, res: Response) => {
 
 export const approveReward = async (req: Request, res: Response) => {
   try {
-    res.json({ success: true, message: 'Reward approved' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Server Error', error });
+    const { id } = req.params;
+    const reward = await Reward.findById(id);
+    if (!reward) {
+      return res.status(404).json({ success: false, message: 'Reward not found' });
+    }
+    
+    if (reward.status === 'Approved') {
+      return res.status(400).json({ success: false, message: 'Reward already approved' });
+    }
+
+    reward.status = 'Approved';
+    await reward.save();
+
+    // Credit user's wallet
+    let wallet = await Wallet.findOne({ user: reward.user });
+    if (!wallet) {
+      wallet = await Wallet.create({ user: reward.user, balance: 0, ecoPoints: 0, availableCoins: 0 });
+    }
+    wallet.balance = (wallet.balance || 0) + reward.amount;
+    wallet.ecoPoints = (wallet.ecoPoints || 0) + (reward.amount * 10);
+    wallet.availableCoins = (wallet.availableCoins || 0) + (reward.amount * 10);
+    await wallet.save();
+
+    // Create wallet transaction
+    await WalletTransaction.create({
+      wallet: wallet._id,
+      user: reward.user,
+      type: 'credit',
+      amount: reward.amount,
+      status: 'completed',
+      description: `Reward payout approved for pickup`,
+      referenceId: reward._id.toString(),
+      date: new Date()
+    });
+
+    // Create Invoice
+    await Invoice.create({
+      user: reward.user,
+      invoiceNumber: 'INV-' + Math.floor(100000 + Math.random() * 900000),
+      amount: reward.amount,
+      date: new Date()
+    });
+
+    // Create Notification
+    await Notification.create({
+      user: reward.user,
+      type: 'wallet',
+      title: 'Wallet Credited 🎉',
+      message: `Your reward of ₹${reward.amount} has been approved and credited to your wallet!`,
+      color: '#10B981',
+      icon: 'check-circle'
+    });
+
+    // Emit live Socket.IO update
+    if ((global as any).io) {
+      (global as any).io.emit('WALLET_UPDATE', { userId: reward.user });
+    }
+
+    res.json({ success: true, message: 'Reward approved successfully', reward, wallet });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Server Error', error: error.message });
   }
 };
 
