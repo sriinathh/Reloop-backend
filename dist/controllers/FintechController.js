@@ -98,6 +98,17 @@ export const requestPayout = async (req, res) => {
                 upiId: wallet.upiId
             }
         });
+        wallet.balance -= amount;
+        await wallet.save();
+        await WalletTransaction.create({
+            wallet: wallet._id,
+            user: userId,
+            type: 'withdrawal',
+            amount: amount,
+            status: 'pending',
+            description: `Withdrawal Request via ${payout.method}`,
+            referenceId: payout._id.toString()
+        });
         res.json({ success: true, message: 'Payout requested successfully', payout });
     }
     catch (error) {
@@ -252,13 +263,43 @@ export const adminUpdatePickupStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { status, partnerId } = req.body;
-        const pickup = await mongoose.model('Pickup').findById(id);
+        const pickup = await Pickup.findById(id);
         if (!pickup)
             return res.status(404).json({ success: false, message: 'Pickup not found' });
+        const previousStatus = pickup.status;
         if (status)
             pickup.status = status;
         if (partnerId)
-            pickup.assignedPartner = partnerId;
+            pickup.driver = new mongoose.Types.ObjectId(partnerId);
+        if (status === 'completed' && previousStatus !== 'completed') {
+            const amount = pickup.actualPrice || pickup.estimatedPrice || 0;
+            if (amount > 0) {
+                let wallet = await Wallet.findOne({ user: pickup.user });
+                if (!wallet) {
+                    wallet = await Wallet.create({
+                        user: pickup.user,
+                        balance: 0,
+                        ecoPoints: 0,
+                        level: 1,
+                        availableCoins: 0,
+                        lifetimeCoins: 0,
+                        coinsEarned: 0,
+                        coinsRedeemed: 0,
+                        totalRewards: 0
+                    });
+                }
+                wallet.balance += amount;
+                await wallet.save();
+                await WalletTransaction.create({
+                    wallet: wallet._id,
+                    user: pickup.user,
+                    type: 'credit',
+                    amount: amount,
+                    status: 'completed',
+                    description: `Recycling earnings - ${pickup.wasteCategoryName || 'Pickup'}`
+                });
+            }
+        }
         await pickup.save();
         res.json({ success: true, pickup });
     }

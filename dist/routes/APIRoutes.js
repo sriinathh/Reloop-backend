@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
-import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Notification, CommunityPost, Payout } from '../models/Schemas.js';
+import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Badge, Challenge, Notification, AiScan, CommunityPost, Payout, ScrapListing, MaterialPrice } from '../models/Schemas.js';
 import { authenticateToken, generateAccessToken, generateRefreshToken, verifyRefreshToken, requireAdmin } from '../middleware/SecurityAuth.js';
 import { uploadToCloudinary, sendEmail, emailTemplates, analyzeWasteImage, chatWithReLoopAi, razorpayInstance } from '../services/ExternalServices.js';
 import { sqliteFindUserByEmail, sqliteFindUserByPhone, sqliteCreateUser, sqliteGetUserProfile } from '../services/SqliteDb.js';
@@ -13,6 +13,98 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'secret123456789';
 const useSqlite = () => process.env.DATABASE_TYPE === 'sqlite' || mongoose.connection.readyState !== 1;
+// Seeding routine for all collection defaults
+const seedAllCollections = async () => {
+    try {
+        if (useSqlite())
+            return;
+        // Seed Material Prices
+        if (await MaterialPrice.countDocuments() === 0) {
+            await MaterialPrice.insertMany([
+                { category: 'Plastic', material: 'PET', pricePerKg: 20 },
+                { category: 'Plastic', material: 'HDPE', pricePerKg: 22 },
+                { category: 'Metal', material: 'Copper', pricePerKg: 780 },
+                { category: 'Metal', material: 'Iron', pricePerKg: 35 },
+                { category: 'Metal', material: 'Aluminum', pricePerKg: 90 },
+                { category: 'Glass', material: 'Glass', pricePerKg: 4 },
+                { category: 'Paper', material: 'Cardboard', pricePerKg: 12 },
+                { category: 'Electronics', material: 'E-Waste', pricePerKg: 50 }
+            ]);
+            console.log('[Seed] Seeding material prices successfully.');
+        }
+        // Seed WasteCategory
+        if (await WasteCategory.countDocuments() === 0) {
+            await WasteCategory.insertMany([
+                { id: '1', name: 'PET Plastic Bottles', category: 'Plastic', pricePerKg: 14, co2SavedPerKg: 1.5, color: '#10B981', isRecyclable: true, trend: 'up', trendPercent: 3.7, description: 'Recovered soda & water bottles.' },
+                { id: '2', name: 'Iron Scrap / Rods', category: 'Metal', pricePerKg: 32, co2SavedPerKg: 2.1, color: '#64748B', isRecyclable: true, trend: 'down', trendPercent: 3.0, description: 'Construction iron scrap.' },
+                { id: '3', name: 'Copper Wires & Tubes', category: 'Metal', pricePerKg: 460, co2SavedPerKg: 4.8, color: '#F59E0B', isRecyclable: true, trend: 'up', trendPercent: 3.3, description: 'Electrical copper wiring.' },
+                { id: '4', name: 'Steel Utensils & Sheets', category: 'Metal', pricePerKg: 42, co2SavedPerKg: 1.8, color: '#94A3B8', isRecyclable: true, trend: 'stable', trendPercent: 0, description: 'Stainless steel scrap.' },
+                { id: '5', name: 'Glass Bottles & Jars', category: 'Glass', pricePerKg: 4, co2SavedPerKg: 0.6, color: '#06B6D4', isRecyclable: true, trend: 'up', trendPercent: 5.2, description: 'Beverage glass jars.' },
+                { id: '6', name: 'Lead Acid Batteries', category: 'Electronic', pricePerKg: 95, co2SavedPerKg: 6.5, color: '#EF4444', isRecyclable: true, trend: 'up', trendPercent: 5.5, description: 'Car and UPS lead-acid batteries.' },
+                { id: '7', name: 'Newspaper & Magazines', category: 'Paper', pricePerKg: 16, co2SavedPerKg: 1.2, color: '#3B82F6', isRecyclable: true, trend: 'up', trendPercent: 3.2, description: 'Old newspapers & prints.' },
+                { id: '8', name: 'Cardboard Boxes', category: 'Paper', pricePerKg: 9.5, co2SavedPerKg: 0.9, color: '#D97706', isRecyclable: true, trend: 'stable', trendPercent: 0, description: 'Shipping boxes & packaging.' },
+                { id: '9', name: 'Old Laptops & Motherboards', category: 'Electronic', pricePerKg: 320, co2SavedPerKg: 8.5, color: '#8B5CF6', isRecyclable: true, trend: 'up', trendPercent: 3.2, description: 'Defunct personal computers.' }
+            ]);
+            console.log('[Seed] Seeding waste categories successfully.');
+        }
+        // Seed Badges
+        if (await Badge.countDocuments() === 0) {
+            await Badge.insertMany([
+                { id: 'b1', name: 'Eco Starter', description: 'Earn 1 Eco Point to kickstart your journey', icon: 'leaf', color: '#10B981', threshold: 1 },
+                { id: 'b2', name: 'Planet Saver', description: 'Earn 50 Eco Points by recycling and saving emissions', icon: 'earth', color: '#3B82F6', threshold: 50 },
+                { id: 'b3', name: 'Green Hero', description: 'Earn 500 Eco Points and lead the community', icon: 'medal', color: '#F59E0B', threshold: 500 },
+                { id: 'b4', name: 'Zero Waste Champ', description: 'Earn 1500 Eco Points for flawless sorting', icon: 'trophy', color: '#A78BFA', threshold: 1500 }
+            ]);
+            console.log('[Seed] Seeding badges successfully.');
+        }
+        // Seed Challenges
+        if (await Challenge.countDocuments() === 0) {
+            await Challenge.insertMany([
+                { id: 'c1', title: 'Summer Cleanup', description: 'Recycle 20 kg of paper waste this summer', targetKg: 20, currentKg: 5, rewardPoints: 200, icon: 'newspaper', color: '#F59E0B', endsAt: new Date(Date.now() + 15 * 86400000), isActive: true },
+                { id: 'c2', title: 'Plastic Purge', description: 'Recycle 15 kg of plastics this week', targetKg: 15, currentKg: 2, rewardPoints: 150, icon: 'fire', color: '#10B981', endsAt: new Date(Date.now() + 7 * 86400000), isActive: true }
+            ]);
+            console.log('[Seed] Seeding challenges successfully.');
+        }
+        // Seed Community Posts
+        if (await CommunityPost.countDocuments() === 0) {
+            let firstUser = await User.findOne({ role: 'customer' });
+            if (!firstUser) {
+                firstUser = await User.create({
+                    email: 'system.recycler@reloop.com',
+                    role: 'customer'
+                });
+                await Profile.create({
+                    user: firstUser._id,
+                    name: 'Aarav Sharma',
+                    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+                    languages: ['English']
+                });
+                await Wallet.create({
+                    user: firstUser._id,
+                    balance: 1500,
+                    ecoPoints: 450,
+                    level: 1
+                });
+            }
+            const profile = await Profile.findOne({ user: firstUser._id });
+            await CommunityPost.create({
+                user: firstUser._id,
+                userName: profile?.name || 'Aarav Sharma',
+                avatarUrl: profile?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+                content: 'Just completed my 10th pickup request! 45 kg plastic saved from oceans. High value PET prices are up today! 🌊♻️',
+                likes: [],
+                comments: []
+            });
+            console.log('[Seed] Seeding community posts successfully.');
+        }
+    }
+    catch (err) {
+        console.error('Failed to seed database:', err);
+    }
+};
+setTimeout(() => {
+    seedAllCollections().catch(console.error);
+}, 2000);
 // ─── ZOD SCHEMA VALIDATIONS ──────────────────────────────────────────────────
 const RegisterSchema = z.object({
     email: z.string().email(),
@@ -33,7 +125,7 @@ router.post('/auth/register', async (req, res) => {
         if (useSqlite()) {
             const existing = await sqliteFindUserByEmail(email);
             if (existing)
-                return res.status(400).json({ success: false, message: 'User already exists' });
+                return res.status(409).json({ success: false, message: 'User already exists' });
             const hashedPassword = await bcrypt.hash(password, 10);
             userId = 'u_' + Math.floor(100000 + Math.random() * 900000);
             await sqliteCreateUser({ id: userId, email, name, password: hashedPassword, phone });
@@ -41,7 +133,7 @@ router.post('/auth/register', async (req, res) => {
         else {
             const existing = await User.findOne({ email });
             if (existing)
-                return res.status(400).json({ success: false, message: 'User already exists' });
+                return res.status(409).json({ success: false, message: 'User already exists' });
             const hashedPassword = await bcrypt.hash(password, 10);
             const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
             const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
@@ -176,6 +268,59 @@ router.post('/auth/reset-password', async (req, res) => {
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
+});
+// REGISTRATION OTP SEND
+router.post('/auth/otp/send', async (req, res) => {
+    const { phone, email } = req.body;
+    const target = (email || phone || '').toLowerCase().trim();
+    if (!target)
+        return res.status(400).json({ success: false, message: 'Email or phone is required' });
+    try {
+        let existing;
+        if (useSqlite()) {
+            existing = await sqliteFindUserByEmail(email);
+        }
+        else {
+            existing = await User.findOne({ email });
+        }
+        if (existing) {
+            return res.status(409).json({ success: false, message: 'User already exists' });
+        }
+        const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        const expiresAt = Date.now() + 10 * 60 * 1000;
+        resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
+        if (email) {
+            await sendEmail(email, 'ReLoop Registration OTP', emailTemplates.otp(dynamicOtp));
+        }
+        console.log(`\n======================================================`);
+        console.log(`[REGISTRATION OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
+        console.log(`======================================================\n`);
+        res.json({
+            success: true,
+            message: `Verification OTP code sent to ${target}.`
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// REGISTRATION OTP VERIFY
+router.post('/auth/otp/verify', async (req, res) => {
+    const { phone, email, otp } = req.body;
+    const target = (email || phone || '').toLowerCase().trim();
+    if (!target || !otp) {
+        return res.status(400).json({ success: false, message: 'Email/phone and OTP are required' });
+    }
+    const storedData = resetOtpStore.get(target);
+    const isValidOtp = storedData && storedData.otp === String(otp).trim() && Date.now() <= storedData.expiresAt;
+    if (!isValidOtp) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid or expired OTP code.'
+        });
+    }
+    resetOtpStore.delete(target);
+    res.json({ success: true, message: 'OTP verified successfully' });
 });
 router.post('/auth/google', async (req, res) => {
     try {
@@ -422,6 +567,39 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+router.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        if (useSqlite()) {
+            return res.json({
+                total_revenue: 125000,
+                total_users: 120,
+                total_partners: 15,
+                total_companies: 5,
+                total_pickups: 340,
+                total_co2_saved: 1200
+            });
+        }
+        const totalUsers = await User.countDocuments({ role: 'customer' });
+        const totalPartners = await User.countDocuments({ role: 'partner' });
+        const totalCompanies = await User.countDocuments({ role: 'company' });
+        const totalPickups = await Pickup.countDocuments();
+        const wallets = await Wallet.find({});
+        const totalRevenue = wallets.reduce((sum, w) => sum + (w.totalPaid || 0), 0);
+        const completedPickups = await Pickup.find({ status: 'completed' });
+        const totalCo2Saved = completedPickups.reduce((sum, p) => sum + ((p.actualWeightKg || p.estimatedWeightKg || 0) * 1.5), 0);
+        res.json({
+            total_revenue: totalRevenue,
+            total_users: totalUsers,
+            total_partners: totalPartners,
+            total_companies: totalCompanies,
+            total_pickups: totalPickups,
+            total_co2_saved: Math.round(totalCo2Saved)
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 // ─── 5. PROFILE ROUTER (/api/profile) ──────────────────────
 const handleGetProfile = async (req, res) => {
     try {
@@ -450,7 +628,7 @@ const handleGetProfile = async (req, res) => {
             if (!w && u) {
                 w = await Wallet.create({
                     user: userId,
-                    balance: 0,
+                    balance: 500, // Test amount
                     ecoPoints: 0,
                     level: 1,
                     availableCoins: 0,
@@ -460,6 +638,10 @@ const handleGetProfile = async (req, res) => {
                     totalRewards: 0
                 });
             }
+            else if (w && w.balance === 0) {
+                w.balance = 500;
+                await w.save();
+            }
             if (p) {
                 profile = {
                     ...p.toObject(),
@@ -467,6 +649,7 @@ const handleGetProfile = async (req, res) => {
                     phone: u?.phone || '',
                     ecoPoints: w?.ecoPoints || 0,
                     balance: w?.balance || 0,
+                    walletBalance: w?.balance || 0,
                     level: w?.level || 1,
                     availableCoins: w?.availableCoins || 0,
                     lifetimeCoins: w?.lifetimeCoins || 0,
@@ -708,6 +891,15 @@ router.post('/payouts/request', authenticateToken, async (req, res) => {
                     upiId: wallet.upiId
                 }
             });
+            await WalletTransaction.create({
+                wallet: wallet._id,
+                user: userId,
+                type: 'withdrawal',
+                amount: -amount,
+                status: 'pending',
+                description: `Withdrawal request via ${method || 'UPI'}`,
+                referenceId: payout._id.toString()
+            });
             return res.json({ success: true, payout });
         }
         res.json({ success: true, payout: { amount, status: 'Pending' } });
@@ -872,32 +1064,7 @@ router.get('/notifications', authenticateToken, async (req, res) => {
 router.patch('/notifications/:id/read', authenticateToken, async (req, res) => {
     res.json({ success: true });
 });
-// ─── 8.5 BADGES ─────────────────────────────────────────────────────────────
-router.get('/badges', authenticateToken, (req, res) => {
-    res.json([
-        { id: 'b1', name: 'First Pickup', description: 'Complete your first pickup', icon: 'star', color: '#16A34A', threshold: 1 },
-        { id: 'b2', name: 'Planet Saver', description: 'Save 50kg of CO2', icon: 'leaf', color: '#0284C7', threshold: 50 },
-        { id: 'b3', name: 'E-Waste Hero', description: 'Recycle 5 electronic items', icon: 'laptop', color: '#7C3AED', threshold: 5 },
-        { id: 'b4', name: 'Community Leader', description: 'Refer 3 friends', icon: 'account-group', color: '#EA580C', threshold: 3 }
-    ]);
-});
-router.get('/user-badges', authenticateToken, (req, res) => {
-    res.json([
-        { badge_id: 'b1', earned_at: new Date().toISOString() }
-    ]);
-});
-router.get('/leaderboard', authenticateToken, (req, res) => {
-    res.json([
-        { id: '1', user_name: 'Aarav Sharma', avatar: 'https://i.pravatar.cc/150?u=1', total_points: 2450, pickups_count: 12, co2_saved_kg: 85, rank: 1 },
-        { id: '2', user_name: 'Priya Patel', avatar: 'https://i.pravatar.cc/150?u=2', total_points: 2100, pickups_count: 10, co2_saved_kg: 70, rank: 2 },
-        { id: '3', user_name: 'Rahul Kumar', avatar: 'https://i.pravatar.cc/150?u=3', total_points: 1850, pickups_count: 8, co2_saved_kg: 60, rank: 3 }
-    ]);
-});
-router.get('/challenges', authenticateToken, (req, res) => {
-    res.json([
-        { id: 'c1', title: 'Recycle 5 Plastics', description: 'Earn 500 bonus points', type: 'collection', target_amount: 5, current_amount: 2, unit: 'items', reward_points: 500, expires_at: new Date(Date.now() + 86400000 * 7).toISOString(), is_active: true }
-    ]);
-});
+// Duplicate static routes removed in favor of dynamic handlers below
 // ─── 9. AI SCANNER & CHATBOT (/api/ai, /api/scanner, /api/chat) ──────────────
 const handleAiScan = async (req, res) => {
     const userId = req.userId || '605c72d6248c89423c7b2a75';
@@ -907,15 +1074,37 @@ const handleAiScan = async (req, res) => {
     try {
         const imageUrl = await uploadToCloudinary(imageBase64, 'scanner');
         const detection = await analyzeWasteImage(imageBase64);
+        if (!useSqlite()) {
+            await AiScan.create({
+                user: userId,
+                imageUrl,
+                detectedClass: detection.category,
+                estimatedWeightKg: parseFloat(detection.estimatedWeight),
+                estimatedPrice: detection.estimatedReward,
+                confidenceScore: detection.confidence / 100,
+                suggestions: detection.suggestions,
+                object: detection.object,
+                category: detection.category,
+                material: detection.material,
+                pricePerKg: detection.pricePerKg,
+                rlCoins: detection.rlCoins,
+                recyclable: detection.recyclable,
+                pickupAvailable: detection.pickupAvailable
+            });
+        }
         res.json({
             success: true,
             imageUrl,
-            detectedClass: detection.detectedClass,
-            detectedName: detection.detectedName,
-            estimatedWeightKg: detection.estimatedWeightKg,
-            estimatedPrice: detection.estimatedPrice,
-            confidenceScore: detection.confidenceScore,
-            suggestions: detection.suggestions
+            object: detection.object,
+            category: detection.category,
+            material: detection.material,
+            confidence: detection.confidence,
+            estimatedWeight: detection.estimatedWeight,
+            pricePerKg: detection.pricePerKg,
+            estimatedReward: detection.estimatedReward,
+            rlCoins: detection.rlCoins,
+            recyclable: detection.recyclable,
+            pickupAvailable: detection.pickupAvailable
         });
     }
     catch (error) {
@@ -969,6 +1158,25 @@ router.post('/scanner/detect', authenticateToken, handleAiScan);
 router.post('/ai/scan', authenticateToken, handleAiScan);
 router.post('/chat/message', authenticateToken, handleAiChat);
 router.post('/ai/chat', authenticateToken, handleAiChat);
+router.get('/ai/prices', async (req, res) => {
+    try {
+        if (useSqlite()) {
+            return res.json([
+                { category: 'Plastic', material: 'PET', pricePerKg: 20 },
+                { category: 'Metal', material: 'Copper', pricePerKg: 780 },
+                { category: 'Metal', material: 'Iron', pricePerKg: 35 },
+                { category: 'Glass', material: 'Glass', pricePerKg: 4 },
+                { category: 'Paper', material: 'Cardboard', pricePerKg: 12 },
+                { category: 'Electronics', material: 'E-Waste', pricePerKg: 50 }
+            ]);
+        }
+        const prices = await MaterialPrice.find({});
+        res.json(prices);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 router.get('/chat/history', authenticateToken, async (req, res) => {
     res.json([
         { sender: 'bot', text: 'Hello! I am ReLoop AI, your smart eco recycling assistant. How can I help you today?' }
@@ -1013,12 +1221,40 @@ router.post('/pickups', authenticateToken, async (req, res) => {
         };
         if (!useSqlite()) {
             const pickup = await Pickup.create(pickupObj);
-            // Import io dynamically or at top. Actually I can just import it at top.
-            // Wait, APIRoutes is imported IN server.ts, which exports io. 
-            // This is a circular dependency if I import { io } from '../server.js'. 
-            // Instead, we can use a global or pass it, but the easiest way is to use a global object or `req.app.get('io')` if we attach it.
-            // We didn't attach it. Let's just create an event emitter or use `global.io = io` in server.ts.
-            // Wait, let's just use `global.io.emit` and set it in server.ts.
+            // Notify Admins
+            try {
+                const admins = await User.find({ role: 'admin' });
+                for (const admin of admins) {
+                    await Notification.create({
+                        user: admin._id,
+                        type: 'pickup',
+                        title: 'New Pickup Booked',
+                        message: `New pickup booked by customer for ${pickup.wasteCategoryName} (${pickup.estimatedWeightKg}kg).`,
+                        icon: 'truck',
+                        color: '#10B981'
+                    });
+                }
+            }
+            catch (err) {
+                console.error('Error creating admin notifications:', err);
+            }
+            // Notify Partners
+            try {
+                const partners = await User.find({ role: 'partner' });
+                for (const partner of partners) {
+                    await Notification.create({
+                        user: partner._id,
+                        type: 'pickup',
+                        title: 'New Pickup Available',
+                        message: `A new pickup request is available at ${pickup.address}.`,
+                        icon: 'truck',
+                        color: '#3B82F6'
+                    });
+                }
+            }
+            catch (err) {
+                console.error('Error creating partner notifications:', err);
+            }
             if (global.io) {
                 global.io.emit('NEW_PICKUP', pickup);
             }
@@ -1082,8 +1318,22 @@ router.get('/community/posts', async (req, res) => {
     try {
         if (!useSqlite()) {
             const posts = await CommunityPost.find().sort({ createdAt: -1 });
-            if (posts.length > 0)
-                return res.json(posts);
+            return res.json(posts.map(p => ({
+                id: p._id.toString(),
+                userName: p.userName,
+                avatarUrl: p.avatarUrl,
+                content: p.content,
+                imageUrl: p.imageUrl,
+                likes: p.likes || [],
+                comments: (p.comments || []).map((c) => ({
+                    user: c.user.toString(),
+                    userName: c.userName,
+                    avatarUrl: c.avatarUrl,
+                    text: c.text,
+                    createdAt: c.createdAt
+                })),
+                createdAt: p.createdAt
+            })));
         }
         res.json([
             { id: 'post1', userName: 'Srinath', avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100', content: 'Just completed my 10th pickup request! 45 kg plastic saved from oceans.', likes: [], comments: [], createdAt: new Date() }
@@ -1093,22 +1343,216 @@ router.get('/community/posts', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+router.post('/community/posts', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        const { content, imageUrl } = req.body;
+        if (!content)
+            return res.status(400).json({ success: false, message: 'Content is required' });
+        let userName = 'Eco Recycler';
+        let avatarUrl = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100';
+        if (!useSqlite()) {
+            const profile = await Profile.findOne({ user: userId });
+            if (profile) {
+                userName = profile.name;
+                avatarUrl = profile.avatarUrl || avatarUrl;
+            }
+            const post = await CommunityPost.create({
+                user: userId,
+                userName,
+                avatarUrl,
+                content,
+                imageUrl,
+                likes: [],
+                comments: []
+            });
+            if (global.io) {
+                global.io.emit('NEW_POST', post);
+            }
+            return res.status(201).json({ success: true, post });
+        }
+        res.status(201).json({ success: true, post: { id: 'mock_post', userName, avatarUrl, content, imageUrl, likes: [], comments: [], createdAt: new Date() } });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/community/posts/:id/like', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        const { id } = req.params;
+        if (useSqlite())
+            return res.json({ success: true, liked: true });
+        const post = await CommunityPost.findById(id);
+        if (!post)
+            return res.status(404).json({ success: false, message: 'Post not found' });
+        const userLikedIndex = post.likes.findIndex(l => l.toString() === userId.toString());
+        let liked = false;
+        if (userLikedIndex >= 0) {
+            post.likes.splice(userLikedIndex, 1);
+        }
+        else {
+            post.likes.push(new mongoose.Types.ObjectId(userId));
+            liked = true;
+        }
+        await post.save();
+        res.json({ success: true, liked, likesCount: post.likes.length });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/community/posts/:id/comment', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        const { id } = req.params;
+        const { text } = req.body;
+        if (!text)
+            return res.status(400).json({ success: false, message: 'Comment text is required' });
+        if (useSqlite())
+            return res.json({ success: true });
+        const post = await CommunityPost.findById(id);
+        if (!post)
+            return res.status(404).json({ success: false, message: 'Post not found' });
+        const profile = await Profile.findOne({ user: userId });
+        const comment = {
+            user: new mongoose.Types.ObjectId(userId),
+            userName: profile?.name || 'Eco Recycler',
+            avatarUrl: profile?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+            text,
+            createdAt: new Date()
+        };
+        post.comments.push(comment);
+        await post.save();
+        res.status(201).json({ success: true, comments: post.comments });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 // ─── 13. REWARDS & CHALLENGES (/api/rewards, /api/challenges, /api/badges) ────
-router.get('/badges', async (req, res) => {
-    res.json([
-        { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1 },
-        { id: 'b2', name: 'Planet Saver', description: 'Save more than 50 kg of carbon emissions', icon: 'earth', color: '#3B82F6', threshold: 50 }
-    ]);
+router.get('/badges', authenticateToken, async (req, res) => {
+    try {
+        if (!useSqlite()) {
+            const badges = await Badge.find();
+            const wallet = await Wallet.findOne({ user: req.userId });
+            const ecoPoints = wallet?.ecoPoints || 0;
+            const mappedBadges = badges.map(b => ({
+                id: b.id || b._id.toString(),
+                name: b.name,
+                description: b.description,
+                icon: b.icon || 'leaf',
+                color: b.color || '#10B981',
+                threshold: b.threshold,
+                earned: ecoPoints >= b.threshold
+            }));
+            return res.json(mappedBadges);
+        }
+        res.json([
+            { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1, earned: true },
+            { id: 'b2', name: 'Planet Saver', description: 'Save more than 50 kg of carbon emissions', icon: 'earth', color: '#3B82F6', threshold: 50, earned: false }
+        ]);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
-router.get('/rewards/badges', async (req, res) => {
-    res.json([
-        { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1 }
-    ]);
+router.get('/rewards/badges', authenticateToken, async (req, res) => {
+    try {
+        if (!useSqlite()) {
+            const badges = await Badge.find();
+            const wallet = await Wallet.findOne({ user: req.userId });
+            const ecoPoints = wallet?.ecoPoints || 0;
+            const earnedBadges = badges.filter(b => ecoPoints >= b.threshold).map(b => ({
+                id: b.id || b._id.toString(),
+                name: b.name,
+                description: b.description,
+                icon: b.icon || 'leaf',
+                color: b.color || '#10B981',
+                threshold: b.threshold,
+                earned: true
+            }));
+            return res.json(earnedBadges);
+        }
+        res.json([
+            { id: 'b1', name: 'Eco Starter', description: 'Complete your first recycling pickup request', icon: 'leaf', color: '#10B981', threshold: 1, earned: true }
+        ]);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
-router.get('/challenges', async (req, res) => {
-    res.json([
-        { id: 'c1', title: 'Summer Cleanup', description: 'Recycle 20 kg of paper waste this summer', targetKg: 20, currentKg: 5, rewardPoints: 200, icon: 'newspaper', color: '#F59E0B', endsAt: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), isActive: true }
-    ]);
+router.get('/challenges', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId || '605c72d6248c89423c7b2a75';
+        if (!useSqlite()) {
+            const challenges = await Challenge.find({ isActive: true });
+            const pickups = await Pickup.find({ user: userId, status: 'completed' }).lean();
+            return res.json(challenges.map(c => {
+                let currentKg = 0;
+                if (c.title.toLowerCase().includes('paper')) {
+                    currentKg = pickups.filter(p => p.wasteCategoryName.toLowerCase().includes('paper') || p.wasteCategoryName.toLowerCase().includes('newspaper') || p.wasteCategoryName.toLowerCase().includes('cardboard')).reduce((sum, p) => sum + (p.actualWeightKg || p.estimatedWeightKg || 0), 0);
+                }
+                else if (c.title.toLowerCase().includes('plastic')) {
+                    currentKg = pickups.filter(p => p.wasteCategoryName.toLowerCase().includes('plastic')).reduce((sum, p) => sum + (p.actualWeightKg || p.estimatedWeightKg || 0), 0);
+                }
+                else {
+                    currentKg = pickups.reduce((sum, p) => sum + (p.actualWeightKg || p.estimatedWeightKg || 0), 0);
+                }
+                return {
+                    id: c.id || c._id.toString(),
+                    title: c.title,
+                    description: c.description,
+                    targetKg: c.targetKg,
+                    currentKg: Math.min(Math.round(currentKg * 10) / 10, c.targetKg),
+                    rewardPoints: c.rewardPoints,
+                    icon: c.icon || 'star',
+                    color: c.color || '#F59E0B',
+                    endsAt: c.endsAt || new Date(Date.now() + 15 * 86400000),
+                    isActive: c.isActive
+                };
+            }));
+        }
+        res.json([
+            { id: 'c1', title: 'Summer Cleanup', description: 'Recycle 20 kg of paper waste this summer', targetKg: 20, currentKg: 5, rewardPoints: 200, icon: 'newspaper', color: '#F59E0B', endsAt: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), isActive: true }
+        ]);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// ─── 13.5 LEADERBOARD ──────────────────────────────────────────────────────────
+router.get('/leaderboard', authenticateToken, async (req, res) => {
+    try {
+        if (!useSqlite()) {
+            const wallets = await Wallet.find().sort({ ecoPoints: -1 }).limit(20).lean();
+            const leaderboard = await Promise.all(wallets.map(async (w, index) => {
+                const profile = await Profile.findOne({ user: w.user }).lean();
+                const name = profile?.name || 'Unknown User';
+                const initials = name.split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase();
+                const pickupsCount = await Pickup.countDocuments({ user: w.user, status: 'completed' });
+                const completedPickupsList = await Pickup.find({ user: w.user, status: 'completed' }).lean();
+                const co2SavedKg = completedPickupsList.reduce((sum, p) => sum + ((p.actualWeightKg || p.estimatedWeightKg || 0) * 1.5), 0);
+                return {
+                    id: w.user.toString(),
+                    user_name: name,
+                    avatar: initials,
+                    total_points: w.ecoPoints || 0,
+                    pickups_count: pickupsCount,
+                    co2_saved_kg: Math.round(co2SavedKg),
+                    rank: index + 1
+                };
+            }));
+            return res.json(leaderboard);
+        }
+        res.json([
+            { id: '1', user_name: 'Aarav Sharma', avatar: 'AS', total_points: 4500, pickups_count: 24, co2_saved_kg: 120, rank: 1 },
+            { id: '2', user_name: 'Diya Patel', avatar: 'DP', total_points: 3200, pickups_count: 18, co2_saved_kg: 85, rank: 2 }
+        ]);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
 // ─── 14. LANGUAGES (/api/languages) ──────────────────────────────────────────
 router.get('/languages/:code', async (req, res) => {
@@ -1129,5 +1573,89 @@ router.get('/help', async (req, res) => {
 });
 router.post('/support/ticket', authenticateToken, async (req, res) => {
     res.status(201).json({ success: true, message: 'Support ticket submitted successfully' });
+});
+// ─── 15.5 WALLET REDEMPTION (/api/wallet/redemption-store, /api/wallet/redeem)
+router.get('/wallet/redemption-store', authenticateToken, async (req, res) => {
+    try {
+        const giftCards = [
+            { id: 'gc1', name: 'Amazon Pay Gift Card', value: '₹500', coinCost: 5000, color: '#FF9900', bg: '#FFF7ED', icon: 'shopping-bag' },
+            { id: 'gc2', name: 'Flipkart Gift Voucher', value: '₹250', coinCost: 2500, color: '#2874F0', bg: '#EFF6FF', icon: 'shopping-bag' }
+        ];
+        const coupons = [
+            { id: 'cp1', name: 'Myntra 20% OFF', value: 'Up to ₹500', coinCost: 1000, color: '#E11D48', bg: '#FFF1F2', icon: 'tag' }
+        ];
+        const otherOffers = [
+            { id: 'ot1', name: 'Plant 1 Tree', value: 'Save Nature', coinCost: 1500, color: '#16A34A', bg: '#F0FDF4', icon: 'leaf' }
+        ];
+        res.json({ giftCards, coupons, otherOffers });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/wallet/redeem', authenticateToken, async (req, res) => {
+    try {
+        const { category, itemId, itemDetails } = req.body;
+        // In a real app, deduct ecoPoints from the user's profile and create a Redemption record.
+        res.json({
+            success: true,
+            voucherCode: 'RL-' + Math.random().toString(36).substring(7).toUpperCase(),
+            pin: Math.floor(1000 + Math.random() * 9000).toString()
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// ─── 16. PICKUPS CANCEL ────────────────────────────────────────────────────────
+router.post('/pickups/:id/cancel', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.userId;
+        if (!useSqlite()) {
+            const pickup = await Pickup.findOneAndUpdate({ _id: id, user: userId, status: { $in: ['pending', 'accepted', 'partner_assigned', 'scheduled', 'en_route', 'on_route', 'arrived'] } }, { status: 'cancelled' }, { new: true });
+            if (!pickup)
+                return res.status(404).json({ success: false, message: 'Pickup not found or cannot be cancelled' });
+            return res.json({ success: true, pickup });
+        }
+        res.json({ success: true, message: 'Pickup cancelled (mock)' });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// ─── 17. MARKETPLACE LISTINGS ──────────────────────────────────────────────────
+router.get('/marketplace', authenticateToken, async (req, res) => {
+    try {
+        if (!useSqlite()) {
+            const listings = await ScrapListing.find({ status: 'Active' }).sort({ createdAt: -1 });
+            return res.json(listings);
+        }
+        res.json([
+            { _id: '1', title: 'Bulk Industrial Cardboard', category: 'Industrial', weightKg: 250, pricePerKg: 14, location: 'Mumbai', sellerName: 'Reliable Hub', phone: '+919876543210', isVerified: true, postedAgo: '2 hours ago' }
+        ]);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/marketplace', authenticateToken, async (req, res) => {
+    try {
+        const { title, category, weightKg, pricePerKg, location, phone } = req.body;
+        let sellerName = 'Verified User';
+        if (!useSqlite()) {
+            const profile = await Profile.findOne({ user: req.userId });
+            if (profile)
+                sellerName = profile.name;
+            const newListing = await ScrapListing.create({
+                title, category, weightKg, pricePerKg, location, phone, sellerName, isVerified: true, status: 'Active'
+            });
+            return res.status(201).json(newListing);
+        }
+        res.status(201).json({ id: Date.now().toString(), title, category, weightKg, pricePerKg, location, sellerName, phone, isVerified: true });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
 export default router;

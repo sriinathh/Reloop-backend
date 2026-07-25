@@ -77,6 +77,7 @@ initializeSocketTracking(io);
 const seedDatabase = async () => {
     try {
         // 1. Seed Waste Categories
+        await WasteCategory.deleteMany({});
         const wtCount = await WasteCategory.countDocuments();
         if (wtCount === 0) {
             await WasteCategory.insertMany(DEFAULT_WASTE_CATEGORIES);

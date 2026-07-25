@@ -67,20 +67,15 @@ export class PaymentService {
                 // Update Wallet Ledger
                 const wallet = await Wallet.findOne({ user: payout.user._id });
                 if (wallet) {
-                    wallet.balance -= payout.amount;
-                    wallet.pendingRewards -= payout.amount;
-                    wallet.totalPaid += payout.amount;
+                    // Update Wallet Ledger (balance was already deducted on request)
+                    if (wallet.pendingRewards >= payout.amount)
+                        wallet.pendingRewards -= payout.amount;
+                    wallet.totalPaid = (wallet.totalPaid || 0) + payout.amount;
                     await wallet.save();
-                    // Create Transaction History
-                    await WalletTransaction.create({
-                        wallet: wallet._id,
-                        user: payout.user._id,
-                        type: 'withdrawal',
-                        amount: payout.amount,
+                    // Update Transaction History
+                    await WalletTransaction.findOneAndUpdate({ referenceId: payout._id.toString() }, {
                         status: 'completed',
                         description: `Reward Payout via ${payout.method}`,
-                        referenceId: response.gatewayReferenceId,
-                        date: new Date()
                     });
                     // Create Invoice
                     await mongoose.model('Invoice').create({

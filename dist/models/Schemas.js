@@ -233,6 +233,13 @@ const AiScanSchema = new Schema({
     estimatedPrice: { type: Number, required: true },
     confidenceScore: { type: Number, required: true },
     suggestions: { type: [String], default: [] },
+    object: { type: String },
+    category: { type: String },
+    material: { type: String },
+    pricePerKg: { type: Number },
+    rlCoins: { type: Number },
+    recyclable: { type: Boolean, default: true },
+    pickupAvailable: { type: Boolean, default: true },
     scannedAt: { type: Date, default: Date.now }
 });
 export const AiScan = mongoose.model('AiScan', AiScanSchema);
@@ -458,3 +465,22 @@ const CouponSchema = new Schema({
     status: { type: String, enum: ['Available', 'Redeemed'], default: 'Available' }
 });
 export const Coupon = mongoose.model('Coupon', CouponSchema);
+const ScrapListingSchema = new Schema({
+    title: { type: String, required: true },
+    category: { type: String, required: true },
+    weightKg: { type: Number, required: true },
+    pricePerKg: { type: Number, required: true },
+    location: { type: String, required: true },
+    sellerName: { type: String, required: true },
+    phone: { type: String, required: true },
+    isVerified: { type: Boolean, default: false },
+    status: { type: String, enum: ['Active', 'Sold', 'Archived'], default: 'Active' },
+}, { timestamps: true });
+export const ScrapListing = mongoose.model('ScrapListing', ScrapListingSchema);
+const MaterialPriceSchema = new Schema({
+    category: { type: String, required: true },
+    material: { type: String, required: true, unique: true },
+    pricePerKg: { type: Number, required: true },
+    updatedAt: { type: Date, default: Date.now }
+});
+export const MaterialPrice = mongoose.model('MaterialPrice', MaterialPriceSchema);
