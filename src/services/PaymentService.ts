@@ -1,5 +1,6 @@
 import { Payout, Wallet, WalletTransaction } from '../models/Schemas.js';
 import mongoose from 'mongoose';
+import { sendPushNotification, sendEmail } from './ExternalServices.js';
 
 export interface PayoutRequest {
   payoutId: string;
@@ -99,7 +100,7 @@ export class PaymentService {
         await payout.save();
 
         // Update Wallet Ledger
-        const wallet = await Wallet.findOne({ user: payout.user._id });
+        const wallet = await Wallet.findOne({ user: (payout.user as any)._id });
         if (wallet) {
           // Update Wallet Ledger (balance was already deducted on request)
           if (wallet.pendingRewards >= payout.amount) wallet.pendingRewards -= payout.amount;
@@ -117,12 +118,57 @@ export class PaymentService {
 
           // Create Invoice
           await mongoose.model('Invoice').create({
-            user: payout.user._id,
+            user: (payout.user as any)._id,
             payout: payout._id,
             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             amount: payout.amount,
             date: new Date()
           });
+
+          // Create Notification
+          await mongoose.model('Notification').create({
+            user: (payout.user as any)._id,
+            title: 'Payout Approved! 💸',
+            message: `Your withdrawal of \u20B9${payout.amount} has been approved and processed.`,
+            type: 'wallet',
+            read: false,
+            timestamp: new Date()
+          });
+
+          // Send push notification
+          try {
+            const profile = await mongoose.model('Profile').findOne({ user: (payout.user as any)._id });
+            const token = (profile as any)?.expoPushToken || (profile as any)?.pushToken || 'ExponentPushToken[mock]';
+            await sendPushNotification(token, 'Payout Approved! 💸', `Your withdrawal of \u20B9${payout.amount} has been approved.`);
+          } catch (e) {
+            console.error('Failed to send payout push notification:', e);
+          }
+
+          // Send email
+          try {
+            const userEmail = (payout.user as any).email;
+            if (userEmail) {
+              await sendEmail(
+                userEmail,
+                'Payout Processed - ReLoop',
+                `<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                  <h2 style="color: #10B981;">Withdrawal Request Approved</h2>
+                  <p>Hi ${(payout.user as any).name || 'User'},</p>
+                  <p>Your withdrawal request of <b>\u20B9${payout.amount}</b> has been successfully approved and transferred.</p>
+                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                  <small style="color: #999;">ReLoop AI System</small>
+                </div>`
+              );
+            }
+          } catch (e) {
+            console.error('Failed to send payout email:', e);
+          }
+
+          // Emit live Socket.IO update
+          if ((global as any).io) {
+            (global as any).io.emit('WALLET_UPDATE', { userId: (payout.user as any)._id });
+            (global as any).io.emit('NEW_NOTIFICATION', { userId: (payout.user as any)._id });
+          }
         }
       } else {
         payout.status = 'Failed';

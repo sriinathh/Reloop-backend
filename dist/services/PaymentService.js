@@ -1,5 +1,6 @@
 import { Payout, Wallet, WalletTransaction } from '../models/Schemas.js';
 import mongoose from 'mongoose';
+import { sendPushNotification, sendEmail } from './ExternalServices.js';
 // ─── RAZORPAY ADAPTER ──────────────────────────────────────────────────────────
 export class RazorpayProvider {
     async processPayout(request) {
@@ -85,6 +86,45 @@ export class PaymentService {
                         amount: payout.amount,
                         date: new Date()
                     });
+                    // Create Notification
+                    await mongoose.model('Notification').create({
+                        user: payout.user._id,
+                        title: 'Payout Approved! 💸',
+                        message: `Your withdrawal of \u20B9${payout.amount} has been approved and processed.`,
+                        type: 'wallet',
+                        read: false,
+                        timestamp: new Date()
+                    });
+                    // Send push notification
+                    try {
+                        const profile = await mongoose.model('Profile').findOne({ user: payout.user._id });
+                        const token = profile?.expoPushToken || profile?.pushToken || 'ExponentPushToken[mock]';
+                        await sendPushNotification(token, 'Payout Approved! 💸', `Your withdrawal of \u20B9${payout.amount} has been approved.`);
+                    }
+                    catch (e) {
+                        console.error('Failed to send payout push notification:', e);
+                    }
+                    // Send email
+                    try {
+                        const userEmail = payout.user.email;
+                        if (userEmail) {
+                            await sendEmail(userEmail, 'Payout Processed - ReLoop', `<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                  <h2 style="color: #10B981;">Withdrawal Request Approved</h2>
+                  <p>Hi ${payout.user.name || 'User'},</p>
+                  <p>Your withdrawal request of <b>\u20B9${payout.amount}</b> has been successfully approved and transferred.</p>
+                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                  <small style="color: #999;">ReLoop AI System</small>
+                </div>`);
+                        }
+                    }
+                    catch (e) {
+                        console.error('Failed to send payout email:', e);
+                    }
+                    // Emit live Socket.IO update
+                    if (global.io) {
+                        global.io.emit('WALLET_UPDATE', { userId: payout.user._id });
+                        global.io.emit('NEW_NOTIFICATION', { userId: payout.user._id });
+                    }
                 }
             }
             else {
