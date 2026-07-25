@@ -1210,7 +1210,14 @@ const handleAiScan = async (req: AuthRequest, res: express.Response) => {
       estimatedReward: detection.estimatedReward,
       rlCoins: detection.rlCoins,
       recyclable: detection.recyclable,
-      pickupAvailable: detection.pickupAvailable
+      pickupAvailable: detection.pickupAvailable,
+      // Compatibility keys
+      detectedClass: detection.category,
+      detectedName: detection.object,
+      estimatedWeightKg: detection.estimatedWeightKg,
+      estimatedPrice: detection.estimatedReward,
+      confidenceScore: detection.confidenceScore,
+      suggestions: detection.suggestions
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });

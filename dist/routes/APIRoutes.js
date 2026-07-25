@@ -1104,7 +1104,14 @@ const handleAiScan = async (req, res) => {
             estimatedReward: detection.estimatedReward,
             rlCoins: detection.rlCoins,
             recyclable: detection.recyclable,
-            pickupAvailable: detection.pickupAvailable
+            pickupAvailable: detection.pickupAvailable,
+            // Compatibility keys
+            detectedClass: detection.category,
+            detectedName: detection.object,
+            estimatedWeightKg: detection.estimatedWeightKg,
+            estimatedPrice: detection.estimatedReward,
+            confidenceScore: detection.confidenceScore,
+            suggestions: detection.suggestions
         });
     }
     catch (error) {
