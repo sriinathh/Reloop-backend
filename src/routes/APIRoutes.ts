@@ -1742,7 +1742,7 @@ router.post('/pickups/:id/cancel', authenticateToken, async (req: AuthRequest, r
     
     if (!useSqlite()) {
       const pickup = await Pickup.findOneAndUpdate(
-        { _id: id, user: userId, status: { $in: ['pending', 'accepted', 'partner_assigned', 'scheduled', 'en_route', 'on_route', 'arrived'] } },
+        { _id: id, user: userId, status: { $in: ['pending', 'accepted', 'partner_assigned', 'scheduled', 'en_route', 'on_route', 'arrived'] } } as any,
         { status: 'cancelled' },
         { new: true }
       );
