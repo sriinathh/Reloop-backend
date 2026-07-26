@@ -229,6 +229,8 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
       recyclingTip: 'Please try taking a clearer photo.',
       marketDemand: 'Low'
     };
+  }
+  
   let materialStr = 'Unknown';
   if (typeof parsedResult.material === 'string') {
     materialStr = parsedResult.material;
