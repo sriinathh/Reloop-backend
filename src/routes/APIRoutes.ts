@@ -135,8 +135,7 @@ const RegisterSchema = z.object({
   password: z.string().min(6),
   name: z.string().min(1),
   phone: z.string().optional(),
-  emailOtp: z.string().optional(),
-  phoneOtp: z.string().optional()
+  otp: z.string().optional()
 });
 
 const LoginSchema = z.object({
@@ -149,19 +148,14 @@ const LoginSchema = z.object({
 // ─── 1. AUTHENTICATION ROUTER (/api/auth) ──────────────────────────────────
 router.post('/auth/register', async (req, res) => {
   try {
-    const { email, password, name, phone, emailOtp, phoneOtp } = RegisterSchema.parse(req.body);
+    const { email, password, name, phone, otp } = RegisterSchema.parse(req.body);
 
-    // Verify Both OTPs before creation (if provided in payload)
-    if (emailOtp) {
-      const storedEmail = resetOtpStore.get(email.toLowerCase().trim());
-      if (!storedEmail || storedEmail.otp !== emailOtp || Date.now() > storedEmail.expiresAt) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired Email OTP' });
-      }
-    }
-    if (phone && phoneOtp) {
-      const storedPhone = resetOtpStore.get(phone.trim());
-      if (!storedPhone || storedPhone.otp !== phoneOtp || Date.now() > storedPhone.expiresAt) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired Phone OTP' });
+    // Verify single OTP before creation (if provided in payload)
+    if (otp) {
+      const target = (email || phone || '').toLowerCase().trim();
+      const storedOtp = resetOtpStore.get(target);
+      if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
       }
     }
 
@@ -182,7 +176,7 @@ router.post('/auth/register', async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = await User.create({ 
         email, phone, password: hashedPassword, role: 'customer',
-        emailVerified: !!emailOtp, phoneVerified: !!phoneOtp, name
+        emailVerified: !!otp, phoneVerified: !!otp, name
       });
       const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
       await Wallet.create({
@@ -360,10 +354,20 @@ router.post('/auth/otp/send', async (req, res) => {
     resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
 
     if (email) {
-      await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
+      try {
+        await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
+      } catch (err: any) {
+        // If email fails, don't leave a ghost OTP in store
+        resetOtpStore.delete(target);
+        return res.status(500).json({ success: false, message: err.message || 'Failed to send email OTP' });
+      }
     } else {
       // If phone, fire MSG91 integration
-      await sendMSG91(target, dynamicOtp);
+      const smsSuccess = await sendMSG91(target, dynamicOtp);
+      if (!smsSuccess) {
+        resetOtpStore.delete(target);
+        return res.status(500).json({ success: false, message: 'Failed to send SMS OTP via MSG91' });
+      }
     }
 
     console.log(`\n======================================================`);
@@ -1243,40 +1247,45 @@ const handleAiScan = async (req: AuthRequest, res: express.Response) => {
         user: userId,
         imageUrl,
         detectedClass: detection.category,
-        estimatedWeightKg: parseFloat(detection.estimatedWeight),
-        estimatedPrice: detection.estimatedReward,
+        estimatedWeightKg: detection.estimatedWeight,
+        estimatedPrice: detection.estimatedValue,
         confidenceScore: detection.confidence / 100,
-        suggestions: detection.suggestions,
-        object: detection.object,
+        suggestions: [detection.recyclingTip],
+        object: detection.objectName,
         category: detection.category,
         material: detection.material,
-        pricePerKg: detection.pricePerKg,
-        rlCoins: detection.rlCoins,
+        pricePerKg: detection.estimatedValue / (detection.estimatedWeight || 1),
+        rlCoins: detection.ecoPoints,
         recyclable: detection.recyclable,
-        pickupAvailable: detection.pickupAvailable
+        pickupAvailable: detection.recyclable
       });
     }
 
     res.json({
       success: true,
       imageUrl,
-      object: detection.object,
+      objectName: detection.objectName,
       category: detection.category,
-      material: detection.material,
+      subcategory: detection.subcategory,
       confidence: detection.confidence,
-      estimatedWeight: detection.estimatedWeight,
-      pricePerKg: detection.pricePerKg,
-      estimatedReward: detection.estimatedReward,
-      rlCoins: detection.rlCoins,
+      material: detection.material,
       recyclable: detection.recyclable,
-      pickupAvailable: detection.pickupAvailable,
-      // Compatibility keys
+      estimatedWeight: detection.estimatedWeight,
+      estimatedValue: detection.estimatedValue,
+      ecoPoints: detection.ecoPoints,
+      co2Saved: detection.co2Saved,
+      description: detection.description,
+      recyclingTip: detection.recyclingTip,
+      marketDemand: detection.marketDemand,
+      
+      // Keep very basic compatibility keys so frontend doesn't crash completely
+      // before it finishes reloading the bundle
       detectedClass: detection.category,
-      detectedName: detection.object,
-      estimatedWeightKg: detection.estimatedWeightKg,
-      estimatedPrice: detection.estimatedReward,
-      confidenceScore: detection.confidenceScore,
-      suggestions: detection.suggestions
+      detectedName: detection.objectName,
+      estimatedWeightKg: detection.estimatedWeight,
+      estimatedPrice: detection.estimatedValue,
+      confidenceScore: detection.confidence / 100,
+      suggestions: [detection.recyclingTip]
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });

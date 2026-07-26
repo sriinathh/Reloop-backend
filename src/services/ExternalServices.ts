@@ -95,18 +95,22 @@ export const sendEmail = async (to: string, subject: string, htmlContent: string
   try {
     const apiKey = process.env.RESEND_API_KEY;
     if (apiKey && apiKey !== 're_123456789') {
-      await resend.emails.send({
+      const response = await resend.emails.send({
         from: 'ReLoop Recycling <onboarding@resend.dev>',
         to,
         subject,
         html: htmlContent
       });
+      if (response.error) {
+        throw new Error(response.error.message);
+      }
       console.log(`[Resend Email Service] Delivered: "${subject}" to ${to}`);
     } else {
       console.log(`[Resend Email Service (Dev)] To: ${to} | Subject: "${subject}" | Content sent.`);
     }
-  } catch (error) {
-    console.error('[Email Send Error]:', error);
+  } catch (error: any) {
+    console.error('[Email Send Error]:', error.message);
+    throw new Error('Email provider failed to send OTP: ' + error.message);
   }
 };
 
@@ -146,133 +150,126 @@ export const emailTemplates = {
 import { MaterialPrice } from '../models/Schemas.js';
 
 export interface IAiScanResult {
-  object: string;
+  objectName: string;
   category: string;
-  material: string;
+  subcategory: string;
   confidence: number;
-  estimatedWeight: string;
-  pricePerKg: number;
-  estimatedReward: number;
-  rlCoins: number;
+  material: string;
   recyclable: boolean;
-  pickupAvailable: boolean;
-  suggestions: string[];
-  // Keep backward compatibility fields
-  detectedClass: string;
-  detectedName: string;
-  estimatedWeightKg: number;
-  estimatedPrice: number;
-  confidenceScore: number;
+  estimatedWeight: number;
+  estimatedValue: number;
+  ecoPoints: number;
+  co2Saved: number;
+  description: string;
+  recyclingTip: string;
+  marketDemand: string;
 }
 
 export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanResult> => {
+  const mistralApiKey = process.env.MISTRAL_API_KEY || '';
+  
+  if (!mistralApiKey) {
+    throw new Error('MISTRAL_API_KEY is not configured in the environment variables.');
+  }
+
+  // Call Mistral API for vision-based classification
+  const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${mistralApiKey}`
+    },
+    body: JSON.stringify({
+      model: 'pixtral-12b-2409',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Analyze this object and determine if it is recyclable scrap. 1. Identify the actual object (NEVER assume it is a Plastic Bottle unless it really is). 2. Return strictly JSON matching exactly this format: {"objectName": "Name", "category": "Category", "subcategory": "Subcategory", "confidence": 95.5, "material": "Material Type", "description": "Short description.", "recyclingTip": "Tip", "marketDemand": "High/Medium/Low", "estimatedWeight": 0.5}. Do not include markdown.' },
+            { type: 'image_url', image_url: { url: imageBase64 } }
+          ]
+        }
+      ],
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Mistral API Error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json() as any;
+  
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error('Unexpected response format from Mistral API.');
+  }
+
+  let parsedResult;
   try {
-    const mistralApiKey = process.env.MISTRAL_API_KEY || '';
-    
-    if (!mistralApiKey) {
-      throw new Error('MISTRAL_API_KEY is not configured in the environment variables.');
-    }
+    parsedResult = JSON.parse(data.choices[0].message.content);
+  } catch (e) {
+    throw new Error('Failed to parse Mistral AI JSON response.');
+  }
 
-    // Call Mistral API for vision-based classification
-    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${mistralApiKey}`
-      },
-      body: JSON.stringify({
-        model: 'pixtral-12b-2409',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Identify this object. Determine if it is recyclable scrap material. Analyze it hierarchically: 1. Main Category (e.g. Plastic, Paper, Glass, Metal, Electronics, Non-Recyclable). 2. Specific Object name. 3. Material type (e.g. PET, HDPE, Cardboard, Copper, Aluminum, Glass, E-Waste). 4. Estimate weight in kg. Return strictly JSON matching: {"object": "Plastic Bottle", "category": "Plastic", "material": "PET", "confidence": 0.98, "estimatedWeight": 1.2, "tips": ["Clean it", "Sort separately", "Schedule pickup"]}' },
-              { type: 'image_url', image_url: { url: imageBase64 } }
-            ]
-          }
-        ],
-        response_format: { type: 'json_object' }
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Mistral API Error (${response.status}): ${errorText}`);
-    }
-
-    const data = await response.json() as any;
-    
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      throw new Error('Unexpected response format from Mistral API.');
-    }
-
-    const parsedResult = JSON.parse(data.choices[0].message.content);
-
-    // Dynamic Price Engine Look-up from MaterialPrice collection
-    let pricePerKg = 20; // default fallback (Plastic/PET rate)
-    try {
-      const match = await MaterialPrice.findOne({ 
-        material: { $regex: new RegExp('^' + parsedResult.material + '$', 'i') } 
-      });
-      if (match) {
-        pricePerKg = match.pricePerKg;
-      } else {
-        // Default local pricing map fallback
-        const rateMap: Record<string, number> = {
-          pet: 20, hdpe: 22, copper: 780, iron: 35, aluminum: 90, glass: 4, cardboard: 12, 'e-waste': 50
-        };
-        const key = (parsedResult.material || '').toLowerCase();
-        if (rateMap[key] !== undefined) pricePerKg = rateMap[key];
-      }
-    } catch (e) {
-      console.error('Error looking up MaterialPrice from MongoDB, using fallback:', e);
-    }
-
-    const weightNum = Number(parsedResult.estimatedWeight) || 0.5;
-    const estimatedReward = Math.round(weightNum * pricePerKg);
-    const rlCoins = estimatedReward * 5;
-    const recyclable = parsedResult.category.toLowerCase() !== 'non-recyclable';
-
+  const confidence = parsedResult.confidence || 0;
+  if (confidence < 70) {
     return {
-      object: parsedResult.object,
-      category: parsedResult.category,
-      material: parsedResult.material,
-      confidence: Math.round((parsedResult.confidence || 0.9) * 100),
-      estimatedWeight: `${weightNum.toFixed(1)}kg`,
-      pricePerKg,
-      estimatedReward,
-      rlCoins,
-      recyclable,
-      pickupAvailable: recyclable,
-      suggestions: parsedResult.tips,
-      // Backward compatibility fields
-      detectedClass: parsedResult.category,
-      detectedName: parsedResult.object,
-      estimatedWeightKg: weightNum,
-      estimatedPrice: estimatedReward,
-      confidenceScore: parsedResult.confidence || 0.9
-    };
-  } catch (error) {
-    console.error('[AI Vision Error]:', error);
-    return {
-      object: 'Plastic Bottle',
-      category: 'Plastic',
-      material: 'PET',
-      confidence: 98,
-      estimatedWeight: '1.2kg',
-      pricePerKg: 20,
-      estimatedReward: 24,
-      rlCoins: 120,
-      recyclable: true,
-      pickupAvailable: true,
-      suggestions: ['Wash and dry before disposal', 'Book a bulk pickup for more points'],
-      detectedClass: 'Plastic',
-      detectedName: 'Unknown Plastic Item',
-      estimatedWeightKg: 1.2,
-      estimatedPrice: 24,
-      confidenceScore: 0.98
+      objectName: 'Unknown Object',
+      category: 'Non-Recyclable',
+      subcategory: 'Unknown',
+      confidence: confidence,
+      material: 'Unknown',
+      recyclable: false,
+      estimatedWeight: 0,
+      estimatedValue: 0,
+      ecoPoints: 0,
+      co2Saved: 0,
+      description: 'The AI could not identify this object with sufficient confidence.',
+      recyclingTip: 'Please try taking a clearer photo.',
+      marketDemand: 'Low'
     };
   }
+
+  // Dynamic Price Engine Look-up from MaterialPrice collection
+  let pricePerKg = 20; // default fallback
+  try {
+    const match = await MaterialPrice.findOne({ 
+      material: { $regex: new RegExp('^' + parsedResult.material + '$', 'i') } 
+    });
+    if (match) {
+      pricePerKg = match.pricePerKg;
+    } else {
+      const rateMap: Record<string, number> = {
+        pet: 20, hdpe: 22, copper: 780, iron: 35, aluminum: 90, glass: 4, cardboard: 12, 'e-waste': 50
+      };
+      const key = (parsedResult.material || '').toLowerCase();
+      if (rateMap[key] !== undefined) pricePerKg = rateMap[key];
+    }
+  } catch (e) {
+    console.error('Error looking up MaterialPrice from MongoDB, using fallback:', e);
+  }
+
+  const weightNum = Number(parsedResult.estimatedWeight) || 0.5;
+  const estimatedValue = Math.round(weightNum * pricePerKg);
+  const ecoPoints = estimatedValue * 5;
+  const co2Saved = Number((weightNum * 0.6).toFixed(2)); // Arbitrary formula for CO2 saved
+
+  return {
+    objectName: parsedResult.objectName || 'Unknown',
+    category: parsedResult.category || 'Unknown',
+    subcategory: parsedResult.subcategory || 'Unknown',
+    confidence: confidence,
+    material: parsedResult.material || 'Unknown',
+    recyclable: parsedResult.category?.toLowerCase() !== 'non-recyclable',
+    estimatedWeight: weightNum,
+    estimatedValue: estimatedValue,
+    ecoPoints: ecoPoints,
+    co2Saved: co2Saved,
+    description: parsedResult.description || '',
+    recyclingTip: parsedResult.recyclingTip || '',
+    marketDemand: parsedResult.marketDemand || 'Medium'
+  };
 };
 
 export const chatWithReLoopAi = async (userMessage: string, history: Array<{ sender: 'user' | 'bot'; text: string }>, userContext?: any): Promise<string> => {
