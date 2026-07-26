@@ -18,7 +18,7 @@ import {
 import {
   uploadToCloudinary, sendEmail, emailTemplates,
   analyzeWasteImage, chatWithReLoopAi, generatePdfDoc,
-  sendPushNotification, razorpayInstance
+  sendPushNotification, razorpayInstance, sendMSG91
 } from '../services/ExternalServices.js';
 import {
   sqliteFindUserByEmail, sqliteFindUserByPhone,
@@ -361,9 +361,10 @@ router.post('/auth/otp/send', async (req, res) => {
 
     if (email) {
       await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
+    } else {
+      // If phone, fire MSG91 integration
+      await sendMSG91(target, dynamicOtp);
     }
-    // If phone, this is where MSG91 integration fires in production
-    // e.g. await sendMSG91(phone, dynamicOtp);
 
     console.log(`\n======================================================`);
     console.log(`[OTP SENT VIA MSG91/EMAIL]: Code "${dynamicOtp}" sent to: ${target}`);
@@ -1852,6 +1853,55 @@ router.post('/marketplace', authenticateToken, async (req: AuthRequest, res) => 
     }
     
     res.status(201).json({ id: Date.now().toString(), title, category, weightKg, pricePerKg, location, sellerName, phone, isVerified: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ─── 18. RECYCLING CENTERS & PAYOUTS (NEW) ──────────────────────────────────────
+router.get('/recycling-centers', async (req, res) => {
+  try {
+    const mockCenters = [
+      { id: '1', name: 'Jubilee Hills Smart Bin', location: { latitude: 17.4326, longitude: 78.4071 }, address: 'Jubilee Hills, Road No 36', capacity: 80, isFull: false, supportedTypes: ['Plastic', 'Paper', 'Glass'], distanceKm: 1.2, isActive: true },
+      { id: '2', name: 'Banjara Hills E-Waste Center', location: { latitude: 17.4156, longitude: 78.4347 }, address: 'Banjara Hills, Road No 12', capacity: 45, isFull: false, supportedTypes: ['E-Waste', 'Metal'], distanceKm: 2.5, isActive: true },
+      { id: '3', name: 'Madhapur Mega Hub', location: { latitude: 17.4483, longitude: 78.3915 }, address: 'Inorbit Mall Road, Madhapur', capacity: 95, isFull: true, supportedTypes: ['All'], distanceKm: 3.8, isActive: false }
+    ];
+    res.json(mockCenters);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/payouts/request', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { amount, method } = req.body;
+    const userId = req.userId;
+    
+    if (!useSqlite()) {
+      const wallet = await Wallet.findOne({ user: userId });
+      if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
+      
+      if (wallet.balance < amount) {
+        return res.status(400).json({ success: false, message: 'Insufficient balance' });
+      }
+      
+      // Deduct balance
+      wallet.balance -= amount;
+      await wallet.save();
+      
+      // Create transaction
+      const tx = await WalletTransaction.create({
+        user: userId,
+        type: 'withdrawal',
+        amount,
+        status: 'pending',
+        description: `Withdrawal request via ${method || 'Bank Transfer'}`
+      });
+      
+      return res.status(201).json({ success: true, transaction: tx, newBalance: wallet.balance });
+    }
+    
+    res.status(201).json({ success: true, message: 'Withdrawal requested (mock)', newBalance: 1200 - amount });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

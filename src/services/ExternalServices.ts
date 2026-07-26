@@ -22,6 +22,43 @@ export const razorpayInstance = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET || 'secret123456789'
 });
 
+// ─── MSG91 CONFIGURATION ─────────────────────────────────────────────────────
+export const sendMSG91 = async (phone: string, otp: string): Promise<boolean> => {
+  try {
+    const authKey = process.env.MSG91_AUTH_KEY;
+    const templateId = process.env.MSG91_TEMPLATE_ID;
+    
+    if (!authKey) {
+      console.log(`[Mock MSG91]: OTP ${otp} would be sent to ${phone} (Set MSG91_AUTH_KEY to enable)`);
+      return true; // Fallback to mock behavior if no key
+    }
+
+    const response = await fetch('https://control.msg91.com/api/v5/otp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authkey': authKey
+      },
+      body: JSON.stringify({
+        template_id: templateId,
+        mobile: phone,
+        otp: otp
+      })
+    });
+    
+    const data = await response.json() as any;
+    if (data.type === 'success') {
+      return true;
+    } else {
+      console.error('[MSG91 Error]:', data.message);
+      return false;
+    }
+  } catch (error) {
+    console.error('[MSG91 Exception]:', error);
+    return false;
+  }
+};
+
 export const uploadToCloudinary = async (base64Data: string, folder: string): Promise<string> => {
   try {
     const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
@@ -131,55 +168,45 @@ export interface IAiScanResult {
 export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanResult> => {
   try {
     const mistralApiKey = process.env.MISTRAL_API_KEY || '';
-    let parsedResult = {
-      object: 'Plastic Bottle',
-      category: 'Plastic',
-      material: 'PET',
-      confidence: 0.98,
-      estimatedWeight: 1.2,
-      tips: ['Sort plastic separately', 'Clean and dry before scanning', 'Schedule a smart pickup now']
-    };
-
-    if (mistralApiKey) {
-      // Call Mistral API for vision-based classification
-      const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${mistralApiKey}`
-        },
-        body: JSON.stringify({
-          model: 'pixtral-12b-2409',
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Identify this object. Determine if it is recyclable scrap material. Analyze it hierarchically: 1. Main Category (e.g. Plastic, Paper, Glass, Metal, E-Waste, Non-Recyclable). 2. Specific Object name. 3. Material type (e.g. PET, HDPE, Cardboard, Copper, Aluminum, Glass, E-Waste). 4. Estimate weight in kg. Return strictly JSON matching: {"object": "Plastic Bottle", "category": "Plastic", "material": "PET", "confidence": 0.98, "estimatedWeight": 1.2, "tips": ["Clean it", "Sort separately", "Schedule pickup"]}' },
-                { type: 'image_url', image_url: { url: imageBase64 } }
-              ]
-            }
-          ],
-          response_format: { type: 'json_object' }
-        })
-      });
-      const data = await response.json() as any;
-      parsedResult = JSON.parse(data.choices[0].message.content);
-    } else {
-      // Development mock fallback with random selections
-      const mocks = [
-        { object: 'Plastic Bottle', category: 'Plastic', material: 'PET', confidence: 0.98, estimatedWeight: 0.45 },
-        { object: 'Copper Wire Bundle', category: 'Metal', material: 'Copper', confidence: 0.95, estimatedWeight: 1.5 },
-        { object: 'Iron Rod Scrap', category: 'Metal', material: 'Iron', confidence: 0.92, estimatedWeight: 5.0 },
-        { object: 'Glass Beer Bottle', category: 'Glass', material: 'Glass', confidence: 0.97, estimatedWeight: 0.6 },
-        { object: 'Cardboard Box', category: 'Paper', material: 'Cardboard', confidence: 0.99, estimatedWeight: 2.2 },
-        { object: 'Dead Keyboard', category: 'Electronics', material: 'E-Waste', confidence: 0.91, estimatedWeight: 0.8 }
-      ];
-      const selected = mocks[Math.floor(Math.random() * mocks.length)];
-      parsedResult = {
-        ...selected,
-        tips: [`Sort this ${selected.category} item separately`, 'Ensure it is dry', 'Book a pickup to earn ReLoop coins']
-      };
+    
+    if (!mistralApiKey) {
+      throw new Error('MISTRAL_API_KEY is not configured in the environment variables.');
     }
+
+    // Call Mistral API for vision-based classification
+    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${mistralApiKey}`
+      },
+      body: JSON.stringify({
+        model: 'pixtral-12b-2409',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Identify this object. Determine if it is recyclable scrap material. Analyze it hierarchically: 1. Main Category (e.g. Plastic, Paper, Glass, Metal, Electronics, Non-Recyclable). 2. Specific Object name. 3. Material type (e.g. PET, HDPE, Cardboard, Copper, Aluminum, Glass, E-Waste). 4. Estimate weight in kg. Return strictly JSON matching: {"object": "Plastic Bottle", "category": "Plastic", "material": "PET", "confidence": 0.98, "estimatedWeight": 1.2, "tips": ["Clean it", "Sort separately", "Schedule pickup"]}' },
+              { type: 'image_url', image_url: { url: imageBase64 } }
+            ]
+          }
+        ],
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Mistral API Error (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Unexpected response format from Mistral API.');
+    }
+
+    const parsedResult = JSON.parse(data.choices[0].message.content);
 
     // Dynamic Price Engine Look-up from MaterialPrice collection
     let pricePerKg = 20; // default fallback (Plastic/PET rate)
