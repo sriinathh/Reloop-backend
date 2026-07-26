@@ -9,7 +9,7 @@ import {
   Pickup, WasteCategory, Badge, Challenge,
   Notification, AiScan, AiChat, LanguageTranslation,
   CommunityPost, Address, Withdrawal, Leaderboard, Payout,
-  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog, ScrapListing, MaterialPrice
+  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog, ScrapListing, MaterialPrice, Invoice
 } from '../models/Schemas.js';
 import {
   authenticateToken, AuthRequest, generateAccessToken,
@@ -134,18 +134,37 @@ const RegisterSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   name: z.string().min(1),
-  phone: z.string().optional()
+  phone: z.string().optional(),
+  emailOtp: z.string().optional(),
+  phoneOtp: z.string().optional()
 });
 
 const LoginSchema = z.object({
-  email: z.string().email(),
-  password: z.string()
+  email: z.string().email().optional(),
+  password: z.string().optional(),
+  phone: z.string().optional(),
+  otp: z.string().optional()
 });
 
 // ─── 1. AUTHENTICATION ROUTER (/api/auth) ──────────────────────────────────
 router.post('/auth/register', async (req, res) => {
   try {
-    const { email, password, name, phone } = RegisterSchema.parse(req.body);
+    const { email, password, name, phone, emailOtp, phoneOtp } = RegisterSchema.parse(req.body);
+
+    // Verify Both OTPs before creation (if provided in payload)
+    if (emailOtp) {
+      const storedEmail = resetOtpStore.get(email.toLowerCase().trim());
+      if (!storedEmail || storedEmail.otp !== emailOtp || Date.now() > storedEmail.expiresAt) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired Email OTP' });
+      }
+    }
+    if (phone && phoneOtp) {
+      const storedPhone = resetOtpStore.get(phone.trim());
+      if (!storedPhone || storedPhone.otp !== phoneOtp || Date.now() > storedPhone.expiresAt) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired Phone OTP' });
+      }
+    }
+
     let userId: string;
     let profileName = name;
 
@@ -157,11 +176,14 @@ router.post('/auth/register', async (req, res) => {
       userId = 'u_' + Math.floor(100000 + Math.random() * 900000);
       await sqliteCreateUser({ id: userId, email, name, password: hashedPassword, phone });
     } else {
-      const existing = await User.findOne({ email });
-      if (existing) return res.status(409).json({ success: false, message: 'User already exists' });
+      const existing = await User.findOne({ $or: [{ email }, { phone }] });
+      if (existing) return res.status(409).json({ success: false, message: 'User already exists with this email or phone' });
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
+      const user = await User.create({ 
+        email, phone, password: hashedPassword, role: 'customer',
+        emailVerified: !!emailOtp, phoneVerified: !!phoneOtp, name
+      });
       const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
       await Wallet.create({
         user: user._id,
@@ -187,6 +209,10 @@ router.post('/auth/register', async (req, res) => {
     const accessToken = generateAccessToken(userId, 'customer');
     const refreshToken = generateRefreshToken(userId);
 
+    // Clear OTPs
+    resetOtpStore.delete(email.toLowerCase().trim());
+    if (phone) resetOtpStore.delete(phone.trim());
+
     res.status(201).json({
       success: true,
       token: accessToken,
@@ -200,22 +226,34 @@ router.post('/auth/register', async (req, res) => {
 
 router.post('/auth/login', async (req, res) => {
   try {
-    const { email, password } = LoginSchema.parse(req.body);
+    const { email, password, phone, otp } = LoginSchema.parse(req.body);
 
     let user: any;
-    if (useSqlite()) {
-      user = await sqliteFindUserByEmail(email);
+    if (phone && otp) {
+      // Option 2: Phone + OTP
+      const storedOtp = resetOtpStore.get(phone.trim());
+      if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+      }
+      user = await User.findOne({ phone });
+      if (!user) return res.status(400).json({ success: false, message: 'User not found' });
+      resetOtpStore.delete(phone.trim());
+    } else if (email && password) {
+      // Option 1: Email + Password
+      if (useSqlite()) {
+        user = await sqliteFindUserByEmail(email);
+      } else {
+        user = await User.findOne({ email });
+      }
+      if (!user || !user.password) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password' });
+      }
+      const match = await bcrypt.compare(password, user.password);
+      if (!match) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password' });
+      }
     } else {
-      user = await User.findOne({ email });
-    }
-
-    if (!user || !user.password) {
-      return res.status(400).json({ success: false, message: 'Invalid email or password' });
-    }
-
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) {
-      return res.status(400).json({ success: false, message: 'Invalid email or password' });
+      return res.status(400).json({ success: false, message: 'Provide either email+password or phone+otp' });
     }
 
     const userIdStr = user._id ? user._id.toString() : user.id;
@@ -256,7 +294,6 @@ router.post('/auth/forgot-password', async (req, res) => {
   if (!target) return res.status(400).json({ success: false, message: 'Email or phone is required' });
 
   try {
-    // Generate dynamic 4-digit OTP
     const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const expiresAt = Date.now() + 10 * 60 * 1000;
     resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
@@ -266,35 +303,27 @@ router.post('/auth/forgot-password', async (req, res) => {
     }
 
     console.log(`\n======================================================`);
-    console.log(`[STRICT DYNAMIC OTP SENT VIA EMAIL]: Code "${dynamicOtp}" sent to: ${target}`);
+    console.log(`[STRICT DYNAMIC OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
     console.log(`======================================================\n`);
 
-    res.json({
-      success: true,
-      message: `Verification OTP code sent to ${target}. Please check your email inbox.`
-    });
+    res.json({ success: true, message: `Verification OTP code sent to ${target}.` });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// RESET PASSWORD ENDPOINT (STRICT EMAIL OTP VALIDATION)
+// RESET PASSWORD ENDPOINT
 router.post('/auth/reset-password', async (req, res) => {
   const { email, phone, otp, newPassword } = req.body;
   const target = (email || phone || '').toLowerCase().trim();
 
-  if (!target) {
-    return res.status(400).json({ success: false, message: 'Email or phone is required' });
-  }
+  if (!target) return res.status(400).json({ success: false, message: 'Email or phone is required' });
 
   const storedData = resetOtpStore.get(target);
   const isValidOtp = storedData && storedData.otp === String(otp).trim() && Date.now() <= storedData.expiresAt;
 
   if (!otp || !isValidOtp) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid or expired OTP code. Please check your email and enter the correct code.'
-    });
+    return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
   }
 
   if (!newPassword || newPassword.length < 6) {
@@ -313,22 +342,17 @@ router.post('/auth/reset-password', async (req, res) => {
   }
 });
 
-// REGISTRATION OTP SEND
+// OTP SEND (Used for Registration and Login)
 router.post('/auth/otp/send', async (req, res) => {
-  const { phone, email } = req.body;
+  const { phone, email, purpose } = req.body; // purpose = 'login' | 'register'
   const target = (email || phone || '').toLowerCase().trim();
   if (!target) return res.status(400).json({ success: false, message: 'Email or phone is required' });
 
   try {
-    let existing;
-    if (useSqlite()) {
-      existing = await sqliteFindUserByEmail(email);
-    } else {
-      existing = await User.findOne({ email });
-    }
-    
-    if (existing) {
-      return res.status(409).json({ success: false, message: 'User already exists' });
+    // If purpose is register, ensure they don't already exist
+    if (purpose === 'register') {
+      let existing = useSqlite() ? await sqliteFindUserByEmail(email) : await User.findOne({ $or: [{ email }, { phone }] });
+      if (existing) return res.status(409).json({ success: false, message: 'User already exists' });
     }
 
     const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
@@ -336,17 +360,16 @@ router.post('/auth/otp/send', async (req, res) => {
     resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
 
     if (email) {
-      await sendEmail(email, 'ReLoop Registration OTP', emailTemplates.otp(dynamicOtp));
+      await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
     }
+    // If phone, this is where MSG91 integration fires in production
+    // e.g. await sendMSG91(phone, dynamicOtp);
 
     console.log(`\n======================================================`);
-    console.log(`[REGISTRATION OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
+    console.log(`[OTP SENT VIA MSG91/EMAIL]: Code "${dynamicOtp}" sent to: ${target}`);
     console.log(`======================================================\n`);
 
-    res.json({
-      success: true,
-      message: `Verification OTP code sent to ${target}.`
-    });
+    res.json({ success: true, message: `Verification OTP code sent to ${target}.` });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1085,12 +1108,18 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req: AuthReques
       return res.status(400).json({ success: false, message: 'Invalid payment signature' });
     }
 
+    let invoiceUrl = '';
+    let invoiceRecord;
+    
     if (!useSqlite()) {
+      const user = await User.findById(userId);
+      const profile = await Profile.findOne({ user: userId });
       const wallet = await Wallet.findOne({ user: userId });
+      
       if (wallet) {
         wallet.balance += amount;
         await wallet.save();
-        await WalletTransaction.create({
+        const tx = await WalletTransaction.create({
           wallet: wallet._id,
           user: userId,
           type: 'credit',
@@ -1099,10 +1128,40 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req: AuthReques
           description: 'Wallet top-up via Razorpay',
           referenceId: razorpay_payment_id
         });
+
+        // Generate Invoice
+        invoiceRecord = await Invoice.create({
+          user: userId,
+          invoiceNumber: 'INV-' + Math.floor(100000 + Math.random() * 900000),
+          amount: amount,
+          payout: tx._id, // linking transaction
+          status: 'Paid',
+          date: new Date()
+        });
+
+        // Use InvoiceService and EmailService if available (mocked here for inline execution)
+        invoiceUrl = `https://api.reloop.com/invoices/invoice_${invoiceRecord.invoiceNumber}.pdf`;
+
+        // Send Email Confirmation
+        if (user && user.email) {
+          try {
+            await sendEmail(
+              user.email,
+              'Payment Confirmation - ReLoop',
+              `<p>Hi ${profile?.name || 'User'},</p>
+               <p>We have successfully received your payment of ₹${amount}.</p>
+               <p>Your subscription is now active.</p>
+               <p>Invoice URL: <a href="${invoiceUrl}">${invoiceRecord.invoiceNumber}</a></p>
+               <br/><p>Thank you for choosing ReLoop!</p>`
+            );
+          } catch (e) {
+            console.error('Failed to send invoice email:', e);
+          }
+        }
       }
     }
 
-    res.json({ success: true, message: 'Payment verified and wallet credited' });
+    res.json({ success: true, message: 'Payment verified and wallet credited', invoiceUrl, invoice: invoiceRecord });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -5,20 +5,67 @@ export interface IUser extends Document {
   email: string;
   phone?: string;
   password?: string;
+  name?: string;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  aadhaarVerified?: boolean;
+  aadhaarData?: any;
+  subscriptionPlan?: 'free' | 'premium';
+  subscriptionStatus?: 'active' | 'inactive' | 'cancelled' | 'expired';
+  subscriptionStartDate?: Date;
+  subscriptionExpiryDate?: Date;
+  paymentHistory?: any[];
+  invoiceHistory?: any[];
+  bankDetails?: {
+    accountHolderName?: string;
+    bankName?: string;
+    accountNumber?: string;
+    ifscCode?: string;
+  };
+  upiId?: string;
+  qrImage?: string;
+  wallet?: number;
+  rewardBalance?: number;
+  profileCompleted?: boolean;
   role: 'customer' | 'partner' | 'admin' | 'company';
   googleId?: string;
   refreshToken?: string;
   createdAt: Date;
+  updatedAt?: Date;
 }
+
 
 const UserSchema = new Schema<IUser>({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   phone: { type: String, unique: true, sparse: true, trim: true },
   password: { type: String },
+  name: { type: String },
+  emailVerified: { type: Boolean, default: false },
+  phoneVerified: { type: Boolean, default: false },
+  aadhaarVerified: { type: Boolean, default: false },
+  aadhaarData: { type: Schema.Types.Mixed },
+  subscriptionPlan: { type: String, enum: ['free', 'premium'], default: 'free' },
+  subscriptionStatus: { type: String, enum: ['active', 'inactive', 'cancelled', 'expired'], default: 'inactive' },
+  subscriptionStartDate: { type: Date },
+  subscriptionExpiryDate: { type: Date },
+  paymentHistory: { type: [Schema.Types.Mixed], default: [] },
+  invoiceHistory: { type: [Schema.Types.Mixed], default: [] },
+  bankDetails: {
+    accountHolderName: { type: String },
+    bankName: { type: String },
+    accountNumber: { type: String },
+    ifscCode: { type: String },
+  },
+  upiId: { type: String },
+  qrImage: { type: String },
+  wallet: { type: Number, default: 0 },
+  rewardBalance: { type: Number, default: 0 },
+  profileCompleted: { type: Boolean, default: false },
   role: { type: String, enum: ['customer', 'partner', 'admin', 'company'], default: 'customer' },
   googleId: { type: String, unique: true, sparse: true },
   refreshToken: { type: String },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 export const User = mongoose.model<IUser>('User', UserSchema);
