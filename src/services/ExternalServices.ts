@@ -232,7 +232,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
   }
 
   // Dynamic Price Engine Look-up from MaterialPrice collection
-  let pricePerKg = 20; // default fallback
+  let pricePerKg = 40; // Increased base fallback
   try {
     const match = await MaterialPrice.findOne({ 
       material: { $regex: new RegExp('^' + parsedResult.material + '$', 'i') } 
@@ -241,7 +241,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
       pricePerKg = match.pricePerKg;
     } else {
       const rateMap: Record<string, number> = {
-        pet: 20, hdpe: 22, copper: 780, iron: 35, aluminum: 90, glass: 4, cardboard: 12, 'e-waste': 50
+        pet: 25, hdpe: 30, copper: 850, iron: 45, aluminum: 120, glass: 10, cardboard: 15, 'e-waste': 100
       };
       const key = (parsedResult.material || '').toLowerCase();
       if (rateMap[key] !== undefined) pricePerKg = rateMap[key];
@@ -250,8 +250,9 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
     console.error('Error looking up MaterialPrice from MongoDB, using fallback:', e);
   }
 
-  const weightNum = Number(parsedResult.estimatedWeight) || 0.5;
-  const estimatedValue = Math.round(weightNum * pricePerKg);
+  // Ensure minimum realistic weight and minimum value
+  const weightNum = Math.max(0.2, Number(parsedResult.estimatedWeight) || 0.5);
+  const estimatedValue = Math.max(5, Math.round(weightNum * pricePerKg));
   const ecoPoints = estimatedValue * 5;
   const co2Saved = Number((weightNum * 0.6).toFixed(2)); // Arbitrary formula for CO2 saved
 
