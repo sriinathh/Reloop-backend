@@ -1243,22 +1243,27 @@ const handleAiScan = async (req: AuthRequest, res: express.Response) => {
     const detection = await analyzeWasteImage(imageBase64);
 
     if (!useSqlite()) {
-      await AiScan.create({
-        user: userId,
-        imageUrl,
-        detectedClass: detection.category,
-        estimatedWeightKg: detection.estimatedWeight,
-        estimatedPrice: detection.estimatedValue,
-        confidenceScore: detection.confidence / 100,
-        suggestions: [detection.recyclingTip],
-        object: detection.objectName,
-        category: detection.category,
-        material: detection.material,
-        pricePerKg: detection.estimatedValue / (detection.estimatedWeight || 1),
-        rlCoins: detection.ecoPoints,
-        recyclable: detection.recyclable,
-        pickupAvailable: detection.recyclable
-      });
+      try {
+        await AiScan.create({
+          user: userId,
+          imageUrl: imageUrl || '',
+          detectedClass: detection.category || 'Unknown',
+          estimatedWeightKg: detection.estimatedWeight || 0,
+          estimatedPrice: detection.estimatedValue || 0,
+          confidenceScore: (detection.confidence || 0) / 100,
+          suggestions: detection.recyclingTip ? [detection.recyclingTip] : [],
+          object: detection.objectName || 'Unknown',
+          category: detection.category || 'Unknown',
+          material: detection.material || 'Unknown',
+          pricePerKg: (detection.estimatedValue || 0) / (detection.estimatedWeight || 1),
+          rlCoins: detection.ecoPoints || 0,
+          recyclable: detection.recyclable || false,
+          pickupAvailable: detection.recyclable || false
+        });
+      } catch (dbError) {
+        console.error('Failed to save AiScan to MongoDB:', dbError);
+        // Do not throw, allow the user to see the scan result
+      }
     }
 
     res.json({
