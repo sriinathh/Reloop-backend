@@ -10,9 +10,15 @@ export class EmailService {
       return;
     }
 
+    const fromEmail = process.env.EMAIL_FROM;
+    if (!fromEmail) {
+      console.error('[Email Mock] Missing EMAIL_FROM. Cannot send reward email.');
+      return;
+    }
+
     try {
       await resend.emails.send({
-        from: 'ReLoop Rewards <rewards@reloop.com>',
+        from: fromEmail,
         to: email,
         subject: `₹${amount} Reward Credited to Your Account!`,
         html: `
@@ -25,8 +31,12 @@ export class EmailService {
           </div>
         `
       });
-    } catch (error) {
-      console.error('Failed to send reward email:', error);
+    } catch (error: any) {
+      console.error('[Email Send Error - Complete Log]:', error);
+      const msg = error.message?.toLowerCase() || '';
+      if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified')) {
+        console.error('Email service is not configured correctly for Rewards.');
+      }
     }
   }
 
@@ -36,9 +46,15 @@ export class EmailService {
       return;
     }
 
+    const fromEmail = process.env.EMAIL_FROM;
+    if (!fromEmail) {
+      console.error('[Email Mock] Missing EMAIL_FROM. Cannot send payment failed email.');
+      return;
+    }
+
     try {
       await resend.emails.send({
-        from: 'ReLoop Support <support@reloop.com>',
+        from: fromEmail,
         to: email,
         subject: `Update on your ₹${amount} Reward Payout`,
         html: `
@@ -51,8 +67,12 @@ export class EmailService {
           </div>
         `
       });
-    } catch (error) {
-      console.error('Failed to send payment failed email:', error);
+    } catch (error: any) {
+      console.error('[Email Send Error - Complete Log]:', error);
+      const msg = error.message?.toLowerCase() || '';
+      if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified')) {
+        console.error('Email service is not configured correctly for Payments.');
+      }
     }
   }
 }

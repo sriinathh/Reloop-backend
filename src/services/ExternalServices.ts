@@ -92,25 +92,43 @@ export const uploadToCloudinary = async (base64Data: string, folder: string): Pr
 const resend = new Resend(process.env.RESEND_API_KEY || 're_123456789');
 
 export const sendEmail = async (to: string, subject: string, htmlContent: string) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(to)) {
+    throw new Error('Invalid recipient email address.');
+  }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
+
+  if (!apiKey || apiKey === 're_123456789' || !fromEmail) {
+    console.error('[Email Send Error]: Missing RESEND_API_KEY or EMAIL_FROM in environment variables.');
+    throw new Error('Email service is not configured correctly.');
+  }
+
   try {
-    const apiKey = process.env.RESEND_API_KEY;
-    if (apiKey && apiKey !== 're_123456789') {
-      const response = await resend.emails.send({
-        from: 'ReLoop Recycling <onboarding@resend.dev>',
-        to,
-        subject,
-        html: htmlContent
-      });
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
-      console.log(`[Resend Email Service] Delivered: "${subject}" to ${to}`);
-    } else {
-      console.log(`[Resend Email Service (Dev)] To: ${to} | Subject: "${subject}" | Content sent.`);
+    const response = await resend.emails.send({
+      from: fromEmail,
+      to,
+      subject,
+      html: htmlContent
+    });
+
+    if (response.error) {
+      throw new Error(response.error.message);
     }
+    console.log(`[Resend Email Service] Delivered: "${subject}" to ${to}`);
   } catch (error: any) {
-    console.error('[Email Send Error]:', error.message);
-    throw new Error('Email provider failed to send OTP: ' + error.message);
+    // Log the complete error internally for developers
+    console.error('[Email Send Error - Complete Log]:', error);
+    
+    // Check for domain verification or testing restriction errors from Resend
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified') || msg.includes('unverified')) {
+      throw new Error('Email service is not configured correctly.');
+    }
+    
+    // Generic friendly message for any other email delivery failure
+    throw new Error('Unable to send verification email at the moment. Please try again later.');
   }
 };
 
