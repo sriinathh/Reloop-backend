@@ -357,9 +357,14 @@ router.post('/auth/otp/send', async (req, res) => {
       try {
         await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
       } catch (err: any) {
-        // If email fails, don't leave a ghost OTP in store
-        resetOtpStore.delete(target);
-        return res.status(500).json({ success: false, message: err.message || 'Failed to send email OTP' });
+        // DEV MODE BYPASS: If email fails due to Resend restrictions, we still allow the OTP flow to proceed.
+        // We keep the OTP in the store and return it in the message so the developer can see it and test the app.
+        console.warn(`[DEV MODE] Email delivery failed. Bypassing and returning OTP for ${target}. OTP: ${dynamicOtp}`);
+        return res.status(200).json({ 
+          success: true, 
+          message: `[DEV MODE] Email failed. Your test OTP is: ${dynamicOtp}`,
+          mockOtp: dynamicOtp
+        });
       }
     } else {
       // If phone, fire MSG91 integration
