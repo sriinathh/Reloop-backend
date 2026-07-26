@@ -229,13 +229,18 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
       recyclingTip: 'Please try taking a clearer photo.',
       marketDemand: 'Low'
     };
+  let materialStr = 'Unknown';
+  if (typeof parsedResult.material === 'string') {
+    materialStr = parsedResult.material;
+  } else if (parsedResult.material && typeof parsedResult.material === 'object') {
+    materialStr = String(parsedResult.material.primary || parsedResult.material.name || 'Unknown');
   }
 
   // Dynamic Price Engine Look-up from MaterialPrice collection
   let pricePerKg = 40; // Increased base fallback
   try {
     const match = await MaterialPrice.findOne({ 
-      material: { $regex: new RegExp('^' + parsedResult.material + '$', 'i') } 
+      material: { $regex: new RegExp('^' + materialStr + '$', 'i') } 
     });
     if (match) {
       pricePerKg = match.pricePerKg;
@@ -243,7 +248,7 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
       const rateMap: Record<string, number> = {
         pet: 25, hdpe: 30, copper: 850, iron: 45, aluminum: 120, glass: 10, cardboard: 15, 'e-waste': 100
       };
-      const key = (parsedResult.material || '').toLowerCase();
+      const key = materialStr.toLowerCase();
       if (rateMap[key] !== undefined) pricePerKg = rateMap[key];
     }
   } catch (e) {
@@ -257,19 +262,19 @@ export const analyzeWasteImage = async (imageBase64: string): Promise<IAiScanRes
   const co2Saved = Number((weightNum * 0.6).toFixed(2)); // Arbitrary formula for CO2 saved
 
   return {
-    objectName: parsedResult.objectName || 'Unknown',
-    category: parsedResult.category || 'Unknown',
-    subcategory: parsedResult.subcategory || 'Unknown',
+    objectName: String(parsedResult.objectName || 'Unknown'),
+    category: String(parsedResult.category || 'Unknown'),
+    subcategory: String(parsedResult.subcategory || 'Unknown'),
     confidence: confidence,
-    material: parsedResult.material || 'Unknown',
-    recyclable: parsedResult.category?.toLowerCase() !== 'non-recyclable',
+    material: materialStr,
+    recyclable: String(parsedResult.category || '').toLowerCase() !== 'non-recyclable',
     estimatedWeight: weightNum,
     estimatedValue: estimatedValue,
     ecoPoints: ecoPoints,
     co2Saved: co2Saved,
-    description: parsedResult.description || '',
-    recyclingTip: parsedResult.recyclingTip || '',
-    marketDemand: parsedResult.marketDemand || 'Medium'
+    description: String(parsedResult.description || ''),
+    recyclingTip: String(parsedResult.recyclingTip || ''),
+    marketDemand: String(parsedResult.marketDemand || 'Medium')
   };
 };
 
