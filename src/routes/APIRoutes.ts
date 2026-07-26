@@ -1135,7 +1135,6 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req: AuthReques
           invoiceNumber: 'INV-' + Math.floor(100000 + Math.random() * 900000),
           amount: amount,
           payout: tx._id, // linking transaction
-          status: 'Paid',
           date: new Date()
         });
 
