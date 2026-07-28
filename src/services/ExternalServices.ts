@@ -1,5 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import PDFDocument from 'pdfkit';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
@@ -88,47 +88,44 @@ export const uploadToCloudinary = async (base64Data: string, folder: string): Pr
   }
 };
 
-// ─── RESEND EMAIL CONFIGURATION ──────────────────────────────────────────────
-const resend = new Resend(process.env.RESEND_API_KEY || 're_123456789');
-
+// ─── NODEMAILER GMAIL CONFIGURATION ──────────────────────────────────────────
 export const sendEmail = async (to: string, subject: string, htmlContent: string) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(to)) {
     throw new Error('Invalid recipient email address.');
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.EMAIL_FROM;
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
 
-  if (!apiKey || apiKey === 're_123456789' || !fromEmail) {
-    console.error('[Email Send Error]: Missing RESEND_API_KEY or EMAIL_FROM in environment variables.');
-    throw new Error('Email service is not configured correctly.');
+  if (!gmailUser || !gmailAppPassword) {
+    console.error('[Email Send Error]: Missing GMAIL_USER or GMAIL_APP_PASSWORD in environment variables.');
+    throw new Error('Gmail service is not configured correctly in environment variables.');
   }
 
   try {
-    const response = await resend.emails.send({
-      from: fromEmail,
-      to,
-      subject,
-      html: htmlContent
+    console.log(`[Gmail] Sending email "${subject}" to ${to} from ${gmailUser}...`);
+    
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: gmailUser,
+        pass: gmailAppPassword,
+      },
     });
 
-    if (response.error) {
-      throw new Error(response.error.message);
-    }
-    console.log(`[Resend Email Service] Delivered: "${subject}" to ${to}`);
+    await transporter.sendMail({
+      from: `"ReLoop Support" <${gmailUser}>`,
+      to,
+      subject,
+      html: htmlContent,
+    });
+
+    console.log(`[Gmail] Delivered: "${subject}" to ${to}`);
   } catch (error: any) {
-    // Log the complete error internally for developers
-    console.error('[Email Send Error - Complete Log]:', error);
-    
-    // Check for domain verification or testing restriction errors from Resend
-    const msg = error.message?.toLowerCase() || '';
-    if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified') || msg.includes('unverified')) {
-      throw new Error('Email service is not configured correctly.');
-    }
-    
-    // Generic friendly message for any other email delivery failure
-    throw new Error('Unable to send verification email at the moment. Please try again later.');
+    console.error('[Gmail Exception]:', error);
+    // Throw the EXACT error message from Nodemailer/SMTP
+    throw new Error(error.message || 'Unknown Gmail/SMTP Error');
   }
 };
 

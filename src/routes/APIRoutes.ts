@@ -150,14 +150,23 @@ router.post('/auth/register', async (req, res) => {
   try {
     const { email, password, name, phone, otp } = RegisterSchema.parse(req.body);
 
-    // Verify single OTP before creation (if provided in payload)
-    if (otp) {
-      const target = (email || phone || '').toLowerCase().trim();
-      const storedOtp = resetOtpStore.get(target);
-      if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
-      }
+    console.log(`[Register] Request received for email: ${email}, name: ${name}`);
+
+    // ENFORCE OTP Verification before creating user
+    if (!otp) {
+      console.warn(`[Register] Missing OTP for ${email}`);
+      return res.status(400).json({ success: false, step: 'verify_otp', error: 'OTP is required for registration' });
     }
+
+    const target = (email || phone || '').toLowerCase().trim();
+    const storedOtp = resetOtpStore.get(target);
+    
+    if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
+      console.warn(`[Register] Invalid or expired OTP for ${target}`);
+      return res.status(400).json({ success: false, step: 'verify_otp', error: 'Invalid or expired OTP' });
+    }
+    
+    console.log(`[Register] OTP verified for ${target}. Creating user...`);
 
     let userId: string;
     let profileName = name;
@@ -349,21 +358,25 @@ router.post('/auth/otp/send', async (req, res) => {
       if (existing) return res.status(409).json({ success: false, message: 'User already exists' });
     }
 
-    const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    const dynamicOtp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
     const expiresAt = Date.now() + 10 * 60 * 1000;
     resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
 
+    console.log(`[OTP] Generated 6-digit OTP for ${target}`);
+
     if (email) {
       try {
+        console.log(`[OTP] Initiating email sending to ${target}...`);
         await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
+        console.log(`[OTP] Email successfully sent to ${target}`);
       } catch (err: any) {
-        // DEV MODE BYPASS: If email fails due to Resend restrictions, we still allow the OTP flow to proceed.
-        // We keep the OTP in the store and return it in the message so the developer can see it and test the app.
-        console.warn(`[DEV MODE] Email delivery failed. Bypassing and returning OTP for ${target}. OTP: ${dynamicOtp}`);
-        return res.status(200).json({ 
-          success: true, 
-          message: `[DEV MODE] Email failed. Your test OTP is: ${dynamicOtp}`,
-          mockOtp: dynamicOtp
+        console.error(`[OTP] Resend error:`, err.message);
+        // Delete OTP from store since it failed to send
+        resetOtpStore.delete(target);
+        return res.status(500).json({ 
+          success: false, 
+          step: 'send_email',
+          error: err.message 
         });
       }
     } else {
