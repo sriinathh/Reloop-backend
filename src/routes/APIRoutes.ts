@@ -1938,39 +1938,6 @@ router.post('/payouts/request', authenticateToken, async (req: AuthRequest, res)
 router.get('/payment/plans', async (req, res) => {
   try {
     const plans = [
-      { id: 'free', name: 'Free', price: 0, duration: 'Forever', features: ['Basic recycling pickups', 'Standard AI detection', 'Standard rewards (1x)'] },
-      { id: 'basic_49', name: 'Premium', price: 49, duration: '4 Months', features: ['Priority pickups (within 48h)', '1.5x Eco Rewards multiplier', 'Advanced AI scanning'] },
-      { id: 'premium_99', name: 'Pro', price: 99, duration: '6 Months', features: ['Premium pickups (within 24h)', '2x Eco Rewards multiplier', 'Premium support & Zero fees', 'Unlimited AI Scans'] },
-    ];
-    res.status(200).json({ success: true, plans });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-router.post('/payment/apply-coupon', authenticateToken, async (req: AuthRequest, res) => {
-  try {
-    const { code, amount } = req.body;
-    if (useSqlite()) {
-      return res.status(200).json({ success: true, discountAmount: amount * 0.1, finalAmount: amount * 0.9, message: '10% discount applied (Mock SQLite)' });
-    }
-    const coupon = await SubscriptionCoupon.findOne({ code: code.toUpperCase(), isActive: true });
-    if (!coupon) return res.status(400).json({ success: false, message: 'Invalid or inactive coupon' });
-    if (coupon.validUntil < new Date()) return res.status(400).json({ success: false, message: 'Coupon expired' });
-    if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit) return res.status(400).json({ success: false, message: 'Coupon usage limit reached' });
-    if (coupon.minOrderValue && amount < coupon.minOrderValue) return res.status(400).json({ success: false, message: `Minimum order value of ₹${coupon.minOrderValue} required` });
-
-    let discountAmount = 0;
-    if (coupon.discountType === 'flat') {
-      discountAmount = coupon.discountValue;
-    } else {
-      discountAmount = amount * (coupon.discountValue / 100);
-      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) discountAmount = coupon.maxDiscount;
-    }
-
-    res.status(200).json({ success: true, discountAmount, finalAmount: amount - discountAmount, message: 'Coupon applied successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -1990,21 +1957,8 @@ router.post('/payment/create-order', authenticateToken, async (req: AuthRequest,
         } else {
           discountAmount = amount * (coupon.discountValue / 100);
           if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) discountAmount = coupon.maxDiscount;
-        }
-        finalAmount = amount - discountAmount;
-      }
-    }
-
-    // Mock Order Creation (Mocking Razorpay interaction to support Expo Go without native crash)
-    const mockOrderId = 'order_mock_' + Math.random().toString(36).substring(7);
-
-    // Save Transaction internally
-    if (!useSqlite()) {
-      await SubscriptionTransaction.create({
-        user: req.userId!,
-        planId,
         amount: finalAmount,
-        razorpayOrderId: mockOrderId,
+        razorpayOrderId: razorpayOrderId,
         status: 'pending',
         couponCode,
         discountAmount
@@ -2013,7 +1967,7 @@ router.post('/payment/create-order', authenticateToken, async (req: AuthRequest,
 
     res.status(200).json({
       success: true,
-      orderId: mockOrderId,
+      orderId: razorpayOrderId,
       amount: finalAmount,
       planId
     });
@@ -2027,12 +1981,24 @@ router.post('/payment/verify-and-subscribe', authenticateToken, async (req: Auth
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, planId, amount, couponCode, discountAmount } = req.body;
 
     let userEmail = '';
+    
+    // Verify Signature
+    if (!useSqlite() && process.env.RAZORPAY_KEY_SECRET) {
+      const generated_signature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(razorpay_order_id + '|' + razorpay_payment_id)
+        .digest('hex');
+
+      if (generated_signature !== razorpay_signature) {
+        return res.status(400).json({ success: false, message: 'Invalid payment signature' });
+      }
+    }
     let userName = 'ReLoop User';
     let invoiceNumber = `INV-${Date.now()}`;
     let expiryDate = new Date();
 
     if (planId === 'premium_99') expiryDate.setMonth(expiryDate.getMonth() + 6);
-    else if (planId === 'basic_49') expiryDate.setMonth(expiryDate.getMonth() + 4);
+    else if (planId === 'basic_49') expiryDate.setMonth(expiryDate.getMonth() + 3);
     else expiryDate.setFullYear(expiryDate.getFullYear() + 10);
 
     if (useSqlite()) {
@@ -2073,7 +2039,7 @@ router.post('/payment/verify-and-subscribe', authenticateToken, async (req: Auth
 
     // Generate Advanced Invoice PDF
     const invoiceTitle = 'Premium Subscription Invoice';
-    const planName = planId === 'premium_99' ? 'Pro Plan (6 Months)' : planId === 'basic_49' ? 'Premium Plan (4 Months)' : 'Free Plan';
+    const planName = planId === 'premium_99' ? 'Pro Plan (6 Months)' : planId === 'basic_49' ? 'Premium Plan (3 Months)' : 'Free Plan';
     const invoiceDetails = [
       `ReLoop Sustainable Solutions`,
       `Invoice ID: ${invoiceNumber}`,
