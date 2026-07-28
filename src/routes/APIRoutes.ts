@@ -148,25 +148,17 @@ const LoginSchema = z.object({
 // ─── 1. AUTHENTICATION ROUTER (/api/auth) ──────────────────────────────────
 router.post('/auth/register', async (req, res) => {
   try {
-    const { email, password, name, phone, otp } = RegisterSchema.parse(req.body);
+    const { email, password, name, phone } = RegisterSchema.parse(req.body);
 
     console.log(`[Register] Request received for email: ${email}, name: ${name}`);
 
-    // ENFORCE OTP Verification before creating user
-    if (!otp) {
-      console.warn(`[Register] Missing OTP for ${email}`);
-      return res.status(400).json({ success: false, step: 'verify_otp', error: 'OTP is required for registration' });
-    }
-
-    const target = (email || phone || '').toLowerCase().trim();
-    const storedOtp = resetOtpStore.get(target);
-    
-    if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
-      console.warn(`[Register] Invalid or expired OTP for ${target}`);
-      return res.status(400).json({ success: false, step: 'verify_otp', error: 'Invalid or expired OTP' });
+    // Check existing before creating (usually checked below, but good to have)
+    let existingUser = useSqlite() ? await sqliteFindUserByEmail(email) : await User.findOne({ $or: [{ email }, { phone }] });
+    if (existingUser) {
+      return res.status(409).json({ success: false, message: 'User already exists with this account. You can login instead.' });
     }
     
-    console.log(`[Register] OTP verified for ${target}. Creating user...`);
+    console.log(`[Register] Creating user...`);
 
     let userId: string;
     let profileName = name;

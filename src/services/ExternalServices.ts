@@ -1,5 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import PDFDocument from 'pdfkit';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
@@ -88,44 +88,42 @@ export const uploadToCloudinary = async (base64Data: string, folder: string): Pr
   }
 };
 
-// ─── NODEMAILER GMAIL CONFIGURATION ──────────────────────────────────────────
+// ─── RESEND EMAIL CONFIGURATION ──────────────────────────────────────────────
+const resend = new Resend(process.env.RESEND_API_KEY || 're_123456789');
+
 export const sendEmail = async (to: string, subject: string, htmlContent: string) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(to)) {
     throw new Error('Invalid recipient email address.');
   }
 
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
 
-  if (!gmailUser || !gmailAppPassword) {
-    console.error('[Email Send Error]: Missing GMAIL_USER or GMAIL_APP_PASSWORD in environment variables.');
-    throw new Error('Gmail service is not configured correctly in environment variables.');
+  if (!apiKey || apiKey === 're_123456789' || !fromEmail) {
+    console.error('[Email Send Error]: Missing RESEND_API_KEY or EMAIL_FROM in environment variables.');
+    throw new Error('Email service is not configured correctly in environment variables.');
   }
 
   try {
-    console.log(`[Gmail] Sending email "${subject}" to ${to} from ${gmailUser}...`);
+    console.log(`[Resend] Sending email "${subject}" to ${to} from ${fromEmail}...`);
     
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: gmailUser,
-        pass: gmailAppPassword,
-      },
-    });
-
-    await transporter.sendMail({
-      from: `"ReLoop Support" <${gmailUser}>`,
+    const response = await resend.emails.send({
+      from: fromEmail,
       to,
       subject,
-      html: htmlContent,
+      html: htmlContent
     });
 
-    console.log(`[Gmail] Delivered: "${subject}" to ${to}`);
+    if (response.error) {
+      console.error('[Resend API Error]:', response.error);
+      throw new Error(response.error.message);
+    }
+    console.log(`[Resend] Delivered: "${subject}" to ${to}`);
   } catch (error: any) {
-    console.error('[Gmail Exception]:', error);
-    // Throw the EXACT error message from Nodemailer/SMTP
-    throw new Error(error.message || 'Unknown Gmail/SMTP Error');
+    console.error('[Resend Exception]:', error);
+    // Throw the EXACT error message from Resend API
+    throw new Error(error.message || 'Unknown Resend Error');
   }
 };
 
