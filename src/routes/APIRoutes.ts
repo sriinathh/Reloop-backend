@@ -9,7 +9,7 @@ import {
   Pickup, WasteCategory, Badge, Challenge,
   Notification, AiScan, AiChat, LanguageTranslation,
   CommunityPost, Address, Withdrawal, Leaderboard, Payout,
-  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog, ScrapListing, MaterialPrice, Invoice
+  Certificate, EcoItem, EcoOrder, SupportTicket, Referral, AuditLog, ScrapListing, MaterialPrice, Invoice, SubscriptionTransaction, SubscriptionCoupon
 } from '../models/Schemas.js';
 import {
   authenticateToken, AuthRequest, generateAccessToken,
@@ -1928,6 +1928,219 @@ router.post('/payouts/request', authenticateToken, async (req: AuthRequest, res)
     }
     
     res.status(201).json({ success: true, message: 'Withdrawal requested (mock)', newBalance: 1200 - amount });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ─── 14. PAYMENT & SUBSCRIPTION ROUTER (/api/payment) ──────────────────────
+
+router.get('/payment/plans', async (req, res) => {
+  try {
+    const plans = [
+      { id: 'free', name: 'Free', price: 0, duration: 'Forever', features: ['Basic recycling pickups', 'Standard AI detection', 'Standard rewards (1x)'] },
+      { id: 'basic_49', name: 'Premium', price: 49, duration: '4 Months', features: ['Priority pickups (within 48h)', '1.5x Eco Rewards multiplier', 'Advanced AI scanning'] },
+      { id: 'premium_99', name: 'Pro', price: 99, duration: '6 Months', features: ['Premium pickups (within 24h)', '2x Eco Rewards multiplier', 'Premium support & Zero fees', 'Unlimited AI Scans'] },
+    ];
+    res.status(200).json({ success: true, plans });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/payment/apply-coupon', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { code, amount } = req.body;
+    if (useSqlite()) {
+      return res.status(200).json({ success: true, discountAmount: amount * 0.1, finalAmount: amount * 0.9, message: '10% discount applied (Mock SQLite)' });
+    }
+    const coupon = await SubscriptionCoupon.findOne({ code: code.toUpperCase(), isActive: true });
+    if (!coupon) return res.status(400).json({ success: false, message: 'Invalid or inactive coupon' });
+    if (coupon.validUntil < new Date()) return res.status(400).json({ success: false, message: 'Coupon expired' });
+    if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit) return res.status(400).json({ success: false, message: 'Coupon usage limit reached' });
+    if (coupon.minOrderValue && amount < coupon.minOrderValue) return res.status(400).json({ success: false, message: `Minimum order value of ₹${coupon.minOrderValue} required` });
+
+    let discountAmount = 0;
+    if (coupon.discountType === 'flat') {
+      discountAmount = coupon.discountValue;
+    } else {
+      discountAmount = amount * (coupon.discountValue / 100);
+      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) discountAmount = coupon.maxDiscount;
+    }
+
+    res.status(200).json({ success: true, discountAmount, finalAmount: amount - discountAmount, message: 'Coupon applied successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/payment/create-order', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { amount, planId, couponCode } = req.body;
+    if (amount === undefined || !planId) return res.status(400).json({ success: false, message: 'Amount and Plan ID required' });
+
+    // Validate Coupon if applied
+    let finalAmount = amount;
+    let discountAmount = 0;
+    if (!useSqlite() && couponCode) {
+      const coupon = await SubscriptionCoupon.findOne({ code: couponCode.toUpperCase(), isActive: true });
+      if (coupon && coupon.validUntil > new Date()) {
+        if (coupon.discountType === 'flat') {
+          discountAmount = coupon.discountValue;
+        } else {
+          discountAmount = amount * (coupon.discountValue / 100);
+          if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) discountAmount = coupon.maxDiscount;
+        }
+        finalAmount = amount - discountAmount;
+      }
+    }
+
+    // Mock Order Creation (Mocking Razorpay interaction to support Expo Go without native crash)
+    const mockOrderId = 'order_mock_' + Math.random().toString(36).substring(7);
+
+    // Save Transaction internally
+    if (!useSqlite()) {
+      await SubscriptionTransaction.create({
+        user: req.userId!,
+        planId,
+        amount: finalAmount,
+        razorpayOrderId: mockOrderId,
+        status: 'pending',
+        couponCode,
+        discountAmount
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      orderId: mockOrderId,
+      amount: finalAmount,
+      planId
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/payment/verify-and-subscribe', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, planId, amount, couponCode, discountAmount } = req.body;
+
+    let userEmail = '';
+    let userName = 'ReLoop User';
+    let invoiceNumber = `INV-${Date.now()}`;
+    let expiryDate = new Date();
+
+    if (planId === 'premium_99') expiryDate.setMonth(expiryDate.getMonth() + 6);
+    else if (planId === 'basic_49') expiryDate.setMonth(expiryDate.getMonth() + 4);
+    else expiryDate.setFullYear(expiryDate.getFullYear() + 10);
+
+    if (useSqlite()) {
+       const user = await sqliteGetUserProfile(req.userId!);
+       if(user) {
+         userEmail = user.email;
+         userName = user.name;
+       }
+    } else {
+       const user = await User.findById(req.userId!);
+       if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+       
+       user.subscriptionPlan = planId;
+       user.subscriptionStatus = 'active';
+       user.subscriptionStartDate = new Date();
+       user.subscriptionExpiryDate = expiryDate;
+       await user.save();
+       
+       userEmail = user.email;
+       
+       const profile = await Profile.findOne({ user: req.userId! });
+       if (profile) userName = profile.name;
+
+       // Update transaction
+       const tx = await SubscriptionTransaction.findOne({ razorpayOrderId: razorpay_order_id });
+       if (tx) {
+         tx.status = 'success';
+         tx.razorpayPaymentId = razorpay_payment_id;
+         tx.invoiceNumber = invoiceNumber;
+         await tx.save();
+       }
+
+       // Update coupon usage
+       if (couponCode) {
+         await SubscriptionCoupon.updateOne({ code: couponCode }, { $inc: { usageCount: 1 } });
+       }
+    }
+
+    // Generate Advanced Invoice PDF
+    const invoiceTitle = 'Premium Subscription Invoice';
+    const planName = planId === 'premium_99' ? 'Pro Plan (6 Months)' : planId === 'basic_49' ? 'Premium Plan (4 Months)' : 'Free Plan';
+    const invoiceDetails = [
+      `ReLoop Sustainable Solutions`,
+      `Invoice ID: ${invoiceNumber}`,
+      `Date: ${new Date().toLocaleDateString()}`,
+      `Expiry Date: ${expiryDate.toLocaleDateString()}`,
+      `-----------------------------`,
+      `Customer: ${userName}`,
+      `Email: ${userEmail}`,
+      `-----------------------------`,
+      `Item: ${planName}`,
+      `Base Amount: INR ${amount + (discountAmount || 0)}`,
+      `Discount: INR ${discountAmount || 0}`,
+      `GST (18% included): INR ${(amount * 0.18).toFixed(2)}`,
+      `Total Paid: INR ${amount}`,
+      `-----------------------------`,
+      `Order ID: ${razorpay_order_id}`,
+      `Payment ID: ${razorpay_payment_id}`,
+      ``,
+      `Thank you for supporting sustainable recycling.`
+    ];
+
+    const pdfBuffer = await generatePdfDoc(invoiceTitle, invoiceDetails);
+
+    // Send Advanced HTML Email via Resend
+    if (userEmail) {
+      const emailBody = `
+        <div style="font-family: 'Helvetica Neue', Arial, sans-serif; padding: 40px; background: #F8FAFC; color: #0F172A; max-width: 600px; margin: 0 auto; border-radius: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #10B981; font-size: 32px; margin: 0;">Welcome to ReLoop Premium!</h1>
+            <p style="color: #64748B; font-size: 16px;">Your payment was successful.</p>
+          </div>
+          <div style="background: #FFFFFF; padding: 30px; border-radius: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+            <p style="font-size: 16px; margin-bottom: 20px;">Hi <b>${userName}</b>,</p>
+            <p style="font-size: 16px; line-height: 1.6;">Thank you for upgrading to the <b>${planName}</b>. Your advanced recycling features are now unlocked.</p>
+            <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Amount Paid</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">₹${amount}</td></tr>
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Invoice Number</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${invoiceNumber}</td></tr>
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Payment ID</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${razorpay_payment_id}</td></tr>
+              <tr><td style="padding: 12px 0; color: #64748B;">Valid Until</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${expiryDate.toLocaleDateString()}</td></tr>
+            </table>
+          </div>
+          <p style="text-align: center; margin-top: 30px; color: #94A3B8; font-size: 14px;">Your PDF invoice is attached to this email.</p>
+        </div>
+      `;
+      
+      try {
+        await sendEmail(userEmail, 'Welcome to ReLoop Premium - Payment Successful', emailBody, [
+          { filename: `${invoiceNumber}.pdf`, content: pdfBuffer }
+        ]);
+      } catch (err) {
+        console.error('[Invoice Email Error]', err);
+      }
+    }
+
+    res.status(200).json({ success: true, message: 'Subscription active and invoice sent' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/user/transactions', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    if (useSqlite()) {
+      return res.status(200).json({ success: true, transactions: [] });
+    }
+    const transactions = await SubscriptionTransaction.find({ user: req.userId! }).sort({ createdAt: -1 });
+    res.status(200).json({ success: true, transactions });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

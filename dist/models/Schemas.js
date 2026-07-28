@@ -3,10 +3,33 @@ const UserSchema = new Schema({
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     phone: { type: String, unique: true, sparse: true, trim: true },
     password: { type: String },
+    name: { type: String },
+    emailVerified: { type: Boolean, default: false },
+    phoneVerified: { type: Boolean, default: false },
+    aadhaarVerified: { type: Boolean, default: false },
+    aadhaarData: { type: Schema.Types.Mixed },
+    subscriptionPlan: { type: String, enum: ['free', 'basic_49', 'premium_99'], default: 'free' },
+    subscriptionStatus: { type: String, enum: ['active', 'inactive', 'cancelled', 'expired'], default: 'inactive' },
+    subscriptionStartDate: { type: Date },
+    subscriptionExpiryDate: { type: Date },
+    paymentHistory: { type: [Schema.Types.Mixed], default: [] },
+    invoiceHistory: { type: [Schema.Types.Mixed], default: [] },
+    bankDetails: {
+        accountHolderName: { type: String },
+        bankName: { type: String },
+        accountNumber: { type: String },
+        ifscCode: { type: String },
+    },
+    upiId: { type: String },
+    qrImage: { type: String },
+    wallet: { type: Number, default: 0 },
+    rewardBalance: { type: Number, default: 0 },
+    profileCompleted: { type: Boolean, default: false },
     role: { type: String, enum: ['customer', 'partner', 'admin', 'company'], default: 'customer' },
     googleId: { type: String, unique: true, sparse: true },
     refreshToken: { type: String },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
 });
 export const User = mongoose.model('User', UserSchema);
 const ProfileSchema = new Schema({
@@ -484,3 +507,27 @@ const MaterialPriceSchema = new Schema({
     updatedAt: { type: Date, default: Date.now }
 });
 export const MaterialPrice = mongoose.model('MaterialPrice', MaterialPriceSchema);
+const SubscriptionTransactionSchema = new Schema({
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    planId: { type: String, required: true },
+    amount: { type: Number, required: true },
+    razorpayOrderId: { type: String },
+    razorpayPaymentId: { type: String },
+    status: { type: String, enum: ['pending', 'success', 'failed'], default: 'pending' },
+    couponCode: { type: String },
+    discountAmount: { type: Number, default: 0 },
+    invoiceNumber: { type: String },
+}, { timestamps: true });
+export const SubscriptionTransaction = mongoose.model('SubscriptionTransaction', SubscriptionTransactionSchema);
+const SubscriptionCouponSchema = new Schema({
+    code: { type: String, required: true, unique: true, uppercase: true, trim: true },
+    discountType: { type: String, enum: ['percentage', 'flat'], required: true },
+    discountValue: { type: Number, required: true },
+    maxDiscount: { type: Number },
+    minOrderValue: { type: Number, default: 0 },
+    validUntil: { type: Date, required: true },
+    isActive: { type: Boolean, default: true },
+    usageLimit: { type: Number },
+    usageCount: { type: Number, default: 0 }
+}, { timestamps: true });
+export const SubscriptionCoupon = mongoose.model('SubscriptionCoupon', SubscriptionCouponSchema);

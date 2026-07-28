@@ -4,9 +4,9 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
-import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Badge, Challenge, Notification, AiScan, CommunityPost, Payout, ScrapListing, MaterialPrice } from '../models/Schemas.js';
+import { User, Profile, Kyc, Wallet, WalletTransaction, Pickup, WasteCategory, Badge, Challenge, Notification, AiScan, CommunityPost, Payout, ScrapListing, MaterialPrice, Invoice, SubscriptionTransaction, SubscriptionCoupon } from '../models/Schemas.js';
 import { authenticateToken, generateAccessToken, generateRefreshToken, verifyRefreshToken, requireAdmin } from '../middleware/SecurityAuth.js';
-import { uploadToCloudinary, sendEmail, emailTemplates, analyzeWasteImage, chatWithReLoopAi, razorpayInstance } from '../services/ExternalServices.js';
+import { uploadToCloudinary, sendEmail, emailTemplates, analyzeWasteImage, chatWithReLoopAi, generatePdfDoc, razorpayInstance, sendMSG91 } from '../services/ExternalServices.js';
 import { sqliteFindUserByEmail, sqliteFindUserByPhone, sqliteCreateUser, sqliteGetUserProfile } from '../services/SqliteDb.js';
 const router = express.Router();
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -110,16 +110,26 @@ const RegisterSchema = z.object({
     email: z.string().email(),
     password: z.string().min(6),
     name: z.string().min(1),
-    phone: z.string().optional()
+    phone: z.string().optional(),
+    otp: z.string().optional()
 });
 const LoginSchema = z.object({
-    email: z.string().email(),
-    password: z.string()
+    email: z.string().email().optional(),
+    password: z.string().optional(),
+    phone: z.string().optional(),
+    otp: z.string().optional()
 });
 // ─── 1. AUTHENTICATION ROUTER (/api/auth) ──────────────────────────────────
 router.post('/auth/register', async (req, res) => {
     try {
         const { email, password, name, phone } = RegisterSchema.parse(req.body);
+        console.log(`[Register] Request received for email: ${email}, name: ${name}`);
+        // Check existing before creating (usually checked below, but good to have)
+        let existingUser = useSqlite() ? await sqliteFindUserByEmail(email) : await User.findOne({ $or: [{ email }, { phone }] });
+        if (existingUser) {
+            return res.status(409).json({ success: false, message: 'User already exists with this account. You can login instead.' });
+        }
+        console.log(`[Register] Creating user...`);
         let userId;
         let profileName = name;
         if (useSqlite()) {
@@ -131,11 +141,14 @@ router.post('/auth/register', async (req, res) => {
             await sqliteCreateUser({ id: userId, email, name, password: hashedPassword, phone });
         }
         else {
-            const existing = await User.findOne({ email });
+            const existing = await User.findOne({ $or: [{ email }, { phone }] });
             if (existing)
-                return res.status(409).json({ success: false, message: 'User already exists' });
+                return res.status(409).json({ success: false, message: 'User already exists with this email or phone' });
             const hashedPassword = await bcrypt.hash(password, 10);
-            const user = await User.create({ email, phone, password: hashedPassword, role: 'customer' });
+            const user = await User.create({
+                email, phone, password: hashedPassword, role: 'customer',
+                emailVerified: true, phoneVerified: true, name
+            });
             const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
             await Wallet.create({
                 user: user._id,
@@ -157,6 +170,10 @@ router.post('/auth/register', async (req, res) => {
         sendEmail(email, 'Welcome to ReLoop!', emailTemplates.welcome(name)).catch(console.error);
         const accessToken = generateAccessToken(userId, 'customer');
         const refreshToken = generateRefreshToken(userId);
+        // Clear OTPs
+        resetOtpStore.delete(email.toLowerCase().trim());
+        if (phone)
+            resetOtpStore.delete(phone.trim());
         res.status(201).json({
             success: true,
             token: accessToken,
@@ -170,20 +187,37 @@ router.post('/auth/register', async (req, res) => {
 });
 router.post('/auth/login', async (req, res) => {
     try {
-        const { email, password } = LoginSchema.parse(req.body);
+        const { email, password, phone, otp } = LoginSchema.parse(req.body);
         let user;
-        if (useSqlite()) {
-            user = await sqliteFindUserByEmail(email);
+        if (phone && otp) {
+            // Option 2: Phone + OTP
+            const storedOtp = resetOtpStore.get(phone.trim());
+            if (!storedOtp || storedOtp.otp !== otp || Date.now() > storedOtp.expiresAt) {
+                return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+            }
+            user = await User.findOne({ phone });
+            if (!user)
+                return res.status(400).json({ success: false, message: 'User not found' });
+            resetOtpStore.delete(phone.trim());
+        }
+        else if (email && password) {
+            // Option 1: Email + Password
+            if (useSqlite()) {
+                user = await sqliteFindUserByEmail(email);
+            }
+            else {
+                user = await User.findOne({ email });
+            }
+            if (!user || !user.password) {
+                return res.status(400).json({ success: false, message: 'Invalid email or password' });
+            }
+            const match = await bcrypt.compare(password, user.password);
+            if (!match) {
+                return res.status(400).json({ success: false, message: 'Invalid email or password' });
+            }
         }
         else {
-            user = await User.findOne({ email });
-        }
-        if (!user || !user.password) {
-            return res.status(400).json({ success: false, message: 'Invalid email or password' });
-        }
-        const match = await bcrypt.compare(password, user.password);
-        if (!match) {
-            return res.status(400).json({ success: false, message: 'Invalid email or password' });
+            return res.status(400).json({ success: false, message: 'Provide either email+password or phone+otp' });
         }
         const userIdStr = user._id ? user._id.toString() : user.id;
         let profile;
@@ -220,7 +254,6 @@ router.post('/auth/forgot-password', async (req, res) => {
     if (!target)
         return res.status(400).json({ success: false, message: 'Email or phone is required' });
     try {
-        // Generate dynamic 4-digit OTP
         const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const expiresAt = Date.now() + 10 * 60 * 1000;
         resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
@@ -228,31 +261,24 @@ router.post('/auth/forgot-password', async (req, res) => {
             await sendEmail(email, 'ReLoop Password Reset OTP', emailTemplates.otp(dynamicOtp));
         }
         console.log(`\n======================================================`);
-        console.log(`[STRICT DYNAMIC OTP SENT VIA EMAIL]: Code "${dynamicOtp}" sent to: ${target}`);
+        console.log(`[STRICT DYNAMIC OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
         console.log(`======================================================\n`);
-        res.json({
-            success: true,
-            message: `Verification OTP code sent to ${target}. Please check your email inbox.`
-        });
+        res.json({ success: true, message: `Verification OTP code sent to ${target}.` });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-// RESET PASSWORD ENDPOINT (STRICT EMAIL OTP VALIDATION)
+// RESET PASSWORD ENDPOINT
 router.post('/auth/reset-password', async (req, res) => {
     const { email, phone, otp, newPassword } = req.body;
     const target = (email || phone || '').toLowerCase().trim();
-    if (!target) {
+    if (!target)
         return res.status(400).json({ success: false, message: 'Email or phone is required' });
-    }
     const storedData = resetOtpStore.get(target);
     const isValidOtp = storedData && storedData.otp === String(otp).trim() && Date.now() <= storedData.expiresAt;
     if (!otp || !isValidOtp) {
-        return res.status(400).json({
-            success: false,
-            message: 'Invalid or expired OTP code. Please check your email and enter the correct code.'
-        });
+        return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
     if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
@@ -269,36 +295,52 @@ router.post('/auth/reset-password', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-// REGISTRATION OTP SEND
+// OTP SEND (Used for Registration and Login)
 router.post('/auth/otp/send', async (req, res) => {
-    const { phone, email } = req.body;
+    const { phone, email, purpose } = req.body; // purpose = 'login' | 'register'
     const target = (email || phone || '').toLowerCase().trim();
     if (!target)
         return res.status(400).json({ success: false, message: 'Email or phone is required' });
     try {
-        let existing;
-        if (useSqlite()) {
-            existing = await sqliteFindUserByEmail(email);
+        // If purpose is register, ensure they don't already exist
+        if (purpose === 'register') {
+            let existing = useSqlite() ? await sqliteFindUserByEmail(email) : await User.findOne({ $or: [{ email }, { phone }] });
+            if (existing)
+                return res.status(409).json({ success: false, message: 'User already exists' });
         }
-        else {
-            existing = await User.findOne({ email });
-        }
-        if (existing) {
-            return res.status(409).json({ success: false, message: 'User already exists' });
-        }
-        const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        const dynamicOtp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
         const expiresAt = Date.now() + 10 * 60 * 1000;
         resetOtpStore.set(target, { otp: dynamicOtp, expiresAt });
+        console.log(`[OTP] Generated 6-digit OTP for ${target}`);
         if (email) {
-            await sendEmail(email, 'ReLoop Registration OTP', emailTemplates.otp(dynamicOtp));
+            try {
+                console.log(`[OTP] Initiating email sending to ${target}...`);
+                await sendEmail(email, 'ReLoop OTP', emailTemplates.otp(dynamicOtp));
+                console.log(`[OTP] Email successfully sent to ${target}`);
+            }
+            catch (err) {
+                console.error(`[OTP] Resend error:`, err.message);
+                // Delete OTP from store since it failed to send
+                resetOtpStore.delete(target);
+                return res.status(500).json({
+                    success: false,
+                    step: 'send_email',
+                    error: err.message
+                });
+            }
+        }
+        else {
+            // If phone, fire MSG91 integration
+            const smsSuccess = await sendMSG91(target, dynamicOtp);
+            if (!smsSuccess) {
+                resetOtpStore.delete(target);
+                return res.status(500).json({ success: false, message: 'Failed to send SMS OTP via MSG91' });
+            }
         }
         console.log(`\n======================================================`);
-        console.log(`[REGISTRATION OTP SENT]: Code "${dynamicOtp}" sent to: ${target}`);
+        console.log(`[OTP SENT VIA MSG91/EMAIL]: Code "${dynamicOtp}" sent to: ${target}`);
         console.log(`======================================================\n`);
-        res.json({
-            success: true,
-            message: `Verification OTP code sent to ${target}.`
-        });
+        res.json({ success: true, message: `Verification OTP code sent to ${target}.` });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -687,7 +729,7 @@ const handleGetProfile = async (req, res) => {
 const handleUpdateProfile = async (req, res) => {
     try {
         const userId = req.userId || '605c72d6248c89423c7b2a75';
-        const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch } = req.body;
+        const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch, subscription_plan } = req.body;
         let updateData = {};
         if (name)
             updateData.name = name;
@@ -712,6 +754,10 @@ const handleUpdateProfile = async (req, res) => {
                 userUpdate.email = email;
             if (phone)
                 userUpdate.phone = phone;
+            if (subscription_plan)
+                userUpdate.subscriptionPlan = subscription_plan;
+            if (aadhaar_number)
+                userUpdate.aadhaarVerified = true;
             if (Object.keys(userUpdate).length > 0) {
                 await User.findOneAndUpdate({ _id: userId }, userUpdate);
             }
@@ -985,12 +1031,16 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req, res) => {
         if (generated_signature !== razorpay_signature) {
             return res.status(400).json({ success: false, message: 'Invalid payment signature' });
         }
+        let invoiceUrl = '';
+        let invoiceRecord;
         if (!useSqlite()) {
+            const user = await User.findById(userId);
+            const profile = await Profile.findOne({ user: userId });
             const wallet = await Wallet.findOne({ user: userId });
             if (wallet) {
                 wallet.balance += amount;
                 await wallet.save();
-                await WalletTransaction.create({
+                const tx = await WalletTransaction.create({
                     wallet: wallet._id,
                     user: userId,
                     type: 'credit',
@@ -999,9 +1049,32 @@ router.post('/wallet/razorpay/verify', authenticateToken, async (req, res) => {
                     description: 'Wallet top-up via Razorpay',
                     referenceId: razorpay_payment_id
                 });
+                // Generate Invoice
+                invoiceRecord = await Invoice.create({
+                    user: userId,
+                    invoiceNumber: 'INV-' + Math.floor(100000 + Math.random() * 900000),
+                    amount: amount,
+                    payout: tx._id, // linking transaction
+                    date: new Date()
+                });
+                // Use InvoiceService and EmailService if available (mocked here for inline execution)
+                invoiceUrl = `https://api.reloop.com/invoices/invoice_${invoiceRecord.invoiceNumber}.pdf`;
+                // Send Email Confirmation
+                if (user && user.email) {
+                    try {
+                        await sendEmail(user.email, 'Payment Confirmation - ReLoop', `<p>Hi ${profile?.name || 'User'},</p>
+               <p>We have successfully received your payment of ₹${amount}.</p>
+               <p>Your subscription is now active.</p>
+               <p>Invoice URL: <a href="${invoiceUrl}">${invoiceRecord.invoiceNumber}</a></p>
+               <br/><p>Thank you for choosing ReLoop!</p>`);
+                    }
+                    catch (e) {
+                        console.error('Failed to send invoice email:', e);
+                    }
+                }
             }
         }
-        res.json({ success: true, message: 'Payment verified and wallet credited' });
+        res.json({ success: true, message: 'Payment verified and wallet credited', invoiceUrl, invoice: invoiceRecord });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -1075,43 +1148,53 @@ const handleAiScan = async (req, res) => {
         const imageUrl = await uploadToCloudinary(imageBase64, 'scanner');
         const detection = await analyzeWasteImage(imageBase64);
         if (!useSqlite()) {
-            await AiScan.create({
-                user: userId,
-                imageUrl,
-                detectedClass: detection.category,
-                estimatedWeightKg: parseFloat(detection.estimatedWeight),
-                estimatedPrice: detection.estimatedReward,
-                confidenceScore: detection.confidence / 100,
-                suggestions: detection.suggestions,
-                object: detection.object,
-                category: detection.category,
-                material: detection.material,
-                pricePerKg: detection.pricePerKg,
-                rlCoins: detection.rlCoins,
-                recyclable: detection.recyclable,
-                pickupAvailable: detection.pickupAvailable
-            });
+            try {
+                await AiScan.create({
+                    user: userId,
+                    imageUrl: imageUrl || '',
+                    detectedClass: detection.category || 'Unknown',
+                    estimatedWeightKg: detection.estimatedWeight || 0,
+                    estimatedPrice: detection.estimatedValue || 0,
+                    confidenceScore: (detection.confidence || 0) / 100,
+                    suggestions: detection.recyclingTip ? [detection.recyclingTip] : [],
+                    object: detection.objectName || 'Unknown',
+                    category: detection.category || 'Unknown',
+                    material: detection.material || 'Unknown',
+                    pricePerKg: (detection.estimatedValue || 0) / (detection.estimatedWeight || 1),
+                    rlCoins: detection.ecoPoints || 0,
+                    recyclable: detection.recyclable || false,
+                    pickupAvailable: detection.recyclable || false
+                });
+            }
+            catch (dbError) {
+                console.error('Failed to save AiScan to MongoDB:', dbError);
+                // Do not throw, allow the user to see the scan result
+            }
         }
         res.json({
             success: true,
             imageUrl,
-            object: detection.object,
+            objectName: detection.objectName,
             category: detection.category,
-            material: detection.material,
+            subcategory: detection.subcategory,
             confidence: detection.confidence,
-            estimatedWeight: detection.estimatedWeight,
-            pricePerKg: detection.pricePerKg,
-            estimatedReward: detection.estimatedReward,
-            rlCoins: detection.rlCoins,
+            material: detection.material,
             recyclable: detection.recyclable,
-            pickupAvailable: detection.pickupAvailable,
-            // Compatibility keys
+            estimatedWeight: detection.estimatedWeight,
+            estimatedValue: detection.estimatedValue,
+            ecoPoints: detection.ecoPoints,
+            co2Saved: detection.co2Saved,
+            description: detection.description,
+            recyclingTip: detection.recyclingTip,
+            marketDemand: detection.marketDemand,
+            // Keep very basic compatibility keys so frontend doesn't crash completely
+            // before it finishes reloading the bundle
             detectedClass: detection.category,
-            detectedName: detection.object,
-            estimatedWeightKg: detection.estimatedWeightKg,
-            estimatedPrice: detection.estimatedReward,
-            confidenceScore: detection.confidenceScore,
-            suggestions: detection.suggestions
+            detectedName: detection.objectName,
+            estimatedWeightKg: detection.estimatedWeight,
+            estimatedPrice: detection.estimatedValue,
+            confidenceScore: detection.confidence / 100,
+            suggestions: [detection.recyclingTip]
         });
     }
     catch (error) {
@@ -1660,6 +1743,259 @@ router.post('/marketplace', authenticateToken, async (req, res) => {
             return res.status(201).json(newListing);
         }
         res.status(201).json({ id: Date.now().toString(), title, category, weightKg, pricePerKg, location, sellerName, phone, isVerified: true });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// ─── 18. RECYCLING CENTERS & PAYOUTS (NEW) ──────────────────────────────────────
+router.get('/recycling-centers', async (req, res) => {
+    try {
+        const mockCenters = [
+            { id: '1', name: 'Jubilee Hills Smart Bin', location: { latitude: 17.4326, longitude: 78.4071 }, address: 'Jubilee Hills, Road No 36', capacity: 80, isFull: false, supportedTypes: ['Plastic', 'Paper', 'Glass'], distanceKm: 1.2, isActive: true },
+            { id: '2', name: 'Banjara Hills E-Waste Center', location: { latitude: 17.4156, longitude: 78.4347 }, address: 'Banjara Hills, Road No 12', capacity: 45, isFull: false, supportedTypes: ['E-Waste', 'Metal'], distanceKm: 2.5, isActive: true },
+            { id: '3', name: 'Madhapur Mega Hub', location: { latitude: 17.4483, longitude: 78.3915 }, address: 'Inorbit Mall Road, Madhapur', capacity: 95, isFull: true, supportedTypes: ['All'], distanceKm: 3.8, isActive: false }
+        ];
+        res.json(mockCenters);
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/payouts/request', authenticateToken, async (req, res) => {
+    try {
+        const { amount, method } = req.body;
+        const userId = req.userId;
+        if (!useSqlite()) {
+            const wallet = await Wallet.findOne({ user: userId });
+            if (!wallet)
+                return res.status(404).json({ success: false, message: 'Wallet not found' });
+            if (wallet.balance < amount) {
+                return res.status(400).json({ success: false, message: 'Insufficient balance' });
+            }
+            // Deduct balance
+            wallet.balance -= amount;
+            await wallet.save();
+            // Create transaction
+            const tx = await WalletTransaction.create({
+                user: userId,
+                type: 'withdrawal',
+                amount,
+                status: 'pending',
+                description: `Withdrawal request via ${method || 'Bank Transfer'}`
+            });
+            return res.status(201).json({ success: true, transaction: tx, newBalance: wallet.balance });
+        }
+        res.status(201).json({ success: true, message: 'Withdrawal requested (mock)', newBalance: 1200 - amount });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+// ─── 14. PAYMENT & SUBSCRIPTION ROUTER (/api/payment) ──────────────────────
+router.get('/payment/plans', async (req, res) => {
+    try {
+        const plans = [
+            { id: 'free', name: 'Free', price: 0, duration: 'Forever', features: ['Basic recycling pickups', 'Standard AI detection', 'Standard rewards (1x)'] },
+            { id: 'basic_49', name: 'Premium', price: 49, duration: '4 Months', features: ['Priority pickups (within 48h)', '1.5x Eco Rewards multiplier', 'Advanced AI scanning'] },
+            { id: 'premium_99', name: 'Pro', price: 99, duration: '6 Months', features: ['Premium pickups (within 24h)', '2x Eco Rewards multiplier', 'Premium support & Zero fees', 'Unlimited AI Scans'] },
+        ];
+        res.status(200).json({ success: true, plans });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/payment/apply-coupon', authenticateToken, async (req, res) => {
+    try {
+        const { code, amount } = req.body;
+        if (useSqlite()) {
+            return res.status(200).json({ success: true, discountAmount: amount * 0.1, finalAmount: amount * 0.9, message: '10% discount applied (Mock SQLite)' });
+        }
+        const coupon = await SubscriptionCoupon.findOne({ code: code.toUpperCase(), isActive: true });
+        if (!coupon)
+            return res.status(400).json({ success: false, message: 'Invalid or inactive coupon' });
+        if (coupon.validUntil < new Date())
+            return res.status(400).json({ success: false, message: 'Coupon expired' });
+        if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit)
+            return res.status(400).json({ success: false, message: 'Coupon usage limit reached' });
+        if (coupon.minOrderValue && amount < coupon.minOrderValue)
+            return res.status(400).json({ success: false, message: `Minimum order value of ₹${coupon.minOrderValue} required` });
+        let discountAmount = 0;
+        if (coupon.discountType === 'flat') {
+            discountAmount = coupon.discountValue;
+        }
+        else {
+            discountAmount = amount * (coupon.discountValue / 100);
+            if (coupon.maxDiscount && discountAmount > coupon.maxDiscount)
+                discountAmount = coupon.maxDiscount;
+        }
+        res.status(200).json({ success: true, discountAmount, finalAmount: amount - discountAmount, message: 'Coupon applied successfully' });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/payment/create-order', authenticateToken, async (req, res) => {
+    try {
+        const { amount, planId, couponCode } = req.body;
+        if (amount === undefined || !planId)
+            return res.status(400).json({ success: false, message: 'Amount and Plan ID required' });
+        // Validate Coupon if applied
+        let finalAmount = amount;
+        let discountAmount = 0;
+        if (!useSqlite() && couponCode) {
+            const coupon = await SubscriptionCoupon.findOne({ code: couponCode.toUpperCase(), isActive: true });
+            if (coupon && coupon.validUntil > new Date()) {
+                if (coupon.discountType === 'flat') {
+                    discountAmount = coupon.discountValue;
+                }
+                else {
+                    discountAmount = amount * (coupon.discountValue / 100);
+                    if (coupon.maxDiscount && discountAmount > coupon.maxDiscount)
+                        discountAmount = coupon.maxDiscount;
+                }
+                finalAmount = amount - discountAmount;
+            }
+        }
+        // Mock Order Creation (Mocking Razorpay interaction to support Expo Go without native crash)
+        const mockOrderId = 'order_mock_' + Math.random().toString(36).substring(7);
+        // Save Transaction internally
+        if (!useSqlite()) {
+            await SubscriptionTransaction.create({
+                user: req.userId,
+                planId,
+                amount: finalAmount,
+                razorpayOrderId: mockOrderId,
+                status: 'pending',
+                couponCode,
+                discountAmount
+            });
+        }
+        res.status(200).json({
+            success: true,
+            orderId: mockOrderId,
+            amount: finalAmount,
+            planId
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.post('/payment/verify-and-subscribe', authenticateToken, async (req, res) => {
+    try {
+        const { razorpay_payment_id, razorpay_order_id, razorpay_signature, planId, amount, couponCode, discountAmount } = req.body;
+        let userEmail = '';
+        let userName = 'ReLoop User';
+        let invoiceNumber = `INV-${Date.now()}`;
+        let expiryDate = new Date();
+        if (planId === 'premium_99')
+            expiryDate.setMonth(expiryDate.getMonth() + 6);
+        else if (planId === 'basic_49')
+            expiryDate.setMonth(expiryDate.getMonth() + 4);
+        else
+            expiryDate.setFullYear(expiryDate.getFullYear() + 10);
+        if (useSqlite()) {
+            const user = await sqliteGetUserProfile(req.userId);
+            if (user) {
+                userEmail = user.email;
+                userName = user.name;
+            }
+        }
+        else {
+            const user = await User.findById(req.userId);
+            if (!user)
+                return res.status(404).json({ success: false, message: 'User not found' });
+            user.subscriptionPlan = planId;
+            user.subscriptionStatus = 'active';
+            user.subscriptionStartDate = new Date();
+            user.subscriptionExpiryDate = expiryDate;
+            await user.save();
+            userEmail = user.email;
+            const profile = await Profile.findOne({ user: req.userId });
+            if (profile)
+                userName = profile.name;
+            // Update transaction
+            const tx = await SubscriptionTransaction.findOne({ razorpayOrderId: razorpay_order_id });
+            if (tx) {
+                tx.status = 'success';
+                tx.razorpayPaymentId = razorpay_payment_id;
+                tx.invoiceNumber = invoiceNumber;
+                await tx.save();
+            }
+            // Update coupon usage
+            if (couponCode) {
+                await SubscriptionCoupon.updateOne({ code: couponCode }, { $inc: { usageCount: 1 } });
+            }
+        }
+        // Generate Advanced Invoice PDF
+        const invoiceTitle = 'Premium Subscription Invoice';
+        const planName = planId === 'premium_99' ? 'Pro Plan (6 Months)' : planId === 'basic_49' ? 'Premium Plan (4 Months)' : 'Free Plan';
+        const invoiceDetails = [
+            `ReLoop Sustainable Solutions`,
+            `Invoice ID: ${invoiceNumber}`,
+            `Date: ${new Date().toLocaleDateString()}`,
+            `Expiry Date: ${expiryDate.toLocaleDateString()}`,
+            `-----------------------------`,
+            `Customer: ${userName}`,
+            `Email: ${userEmail}`,
+            `-----------------------------`,
+            `Item: ${planName}`,
+            `Base Amount: INR ${amount + (discountAmount || 0)}`,
+            `Discount: INR ${discountAmount || 0}`,
+            `GST (18% included): INR ${(amount * 0.18).toFixed(2)}`,
+            `Total Paid: INR ${amount}`,
+            `-----------------------------`,
+            `Order ID: ${razorpay_order_id}`,
+            `Payment ID: ${razorpay_payment_id}`,
+            ``,
+            `Thank you for supporting sustainable recycling.`
+        ];
+        const pdfBuffer = await generatePdfDoc(invoiceTitle, invoiceDetails);
+        // Send Advanced HTML Email via Resend
+        if (userEmail) {
+            const emailBody = `
+        <div style="font-family: 'Helvetica Neue', Arial, sans-serif; padding: 40px; background: #F8FAFC; color: #0F172A; max-width: 600px; margin: 0 auto; border-radius: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #10B981; font-size: 32px; margin: 0;">Welcome to ReLoop Premium!</h1>
+            <p style="color: #64748B; font-size: 16px;">Your payment was successful.</p>
+          </div>
+          <div style="background: #FFFFFF; padding: 30px; border-radius: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+            <p style="font-size: 16px; margin-bottom: 20px;">Hi <b>${userName}</b>,</p>
+            <p style="font-size: 16px; line-height: 1.6;">Thank you for upgrading to the <b>${planName}</b>. Your advanced recycling features are now unlocked.</p>
+            <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Amount Paid</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">₹${amount}</td></tr>
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Invoice Number</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${invoiceNumber}</td></tr>
+              <tr style="border-bottom: 1px solid #E2E8F0;"><td style="padding: 12px 0; color: #64748B;">Payment ID</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${razorpay_payment_id}</td></tr>
+              <tr><td style="padding: 12px 0; color: #64748B;">Valid Until</td><td style="padding: 12px 0; text-align: right; font-weight: bold;">${expiryDate.toLocaleDateString()}</td></tr>
+            </table>
+          </div>
+          <p style="text-align: center; margin-top: 30px; color: #94A3B8; font-size: 14px;">Your PDF invoice is attached to this email.</p>
+        </div>
+      `;
+            try {
+                await sendEmail(userEmail, 'Welcome to ReLoop Premium - Payment Successful', emailBody, [
+                    { filename: `${invoiceNumber}.pdf`, content: pdfBuffer }
+                ]);
+            }
+            catch (err) {
+                console.error('[Invoice Email Error]', err);
+            }
+        }
+        res.status(200).json({ success: true, message: 'Subscription active and invoice sent' });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+router.get('/user/transactions', authenticateToken, async (req, res) => {
+    try {
+        if (useSqlite()) {
+            return res.status(200).json({ success: true, transactions: [] });
+        }
+        const transactions = await SubscriptionTransaction.find({ user: req.userId }).sort({ createdAt: -1 });
+        res.status(200).json({ success: true, transactions });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });

@@ -1137,3 +1137,59 @@ const MaterialPriceSchema = new Schema<IMaterialPrice>({
 });
 
 export const MaterialPrice = mongoose.model<IMaterialPrice>('MaterialPrice', MaterialPriceSchema);
+
+// ─── 32. SUBSCRIPTION TRANSACTION SCHEMA ─────────────────────────────────────
+export interface ISubscriptionTransaction extends Document {
+  user: mongoose.Types.ObjectId;
+  planId: string;
+  amount: number;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  status: 'pending' | 'success' | 'failed';
+  couponCode?: string;
+  discountAmount?: number;
+  invoiceNumber?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const SubscriptionTransactionSchema = new Schema<ISubscriptionTransaction>({
+  user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  planId: { type: String, required: true },
+  amount: { type: Number, required: true },
+  razorpayOrderId: { type: String },
+  razorpayPaymentId: { type: String },
+  status: { type: String, enum: ['pending', 'success', 'failed'], default: 'pending' },
+  couponCode: { type: String },
+  discountAmount: { type: Number, default: 0 },
+  invoiceNumber: { type: String },
+}, { timestamps: true });
+
+export const SubscriptionTransaction = mongoose.model<ISubscriptionTransaction>('SubscriptionTransaction', SubscriptionTransactionSchema);
+
+// ─── 33. COUPON SCHEMA ───────────────────────────────────────────────────────
+export interface ISubscriptionCoupon extends Document {
+  code: string;
+  discountType: 'percentage' | 'flat';
+  discountValue: number;
+  maxDiscount?: number;
+  minOrderValue?: number;
+  validUntil: Date;
+  isActive: boolean;
+  usageLimit?: number;
+  usageCount: number;
+}
+
+const SubscriptionCouponSchema = new Schema<ISubscriptionCoupon>({
+  code: { type: String, required: true, unique: true, uppercase: true, trim: true },
+  discountType: { type: String, enum: ['percentage', 'flat'], required: true },
+  discountValue: { type: Number, required: true },
+  maxDiscount: { type: Number },
+  minOrderValue: { type: Number, default: 0 },
+  validUntil: { type: Date, required: true },
+  isActive: { type: Boolean, default: true },
+  usageLimit: { type: Number },
+  usageCount: { type: Number, default: 0 }
+}, { timestamps: true });
+
+export const SubscriptionCoupon = mongoose.model<ISubscriptionCoupon>('SubscriptionCoupon', SubscriptionCouponSchema);

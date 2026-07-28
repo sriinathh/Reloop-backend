@@ -91,7 +91,7 @@ export const uploadToCloudinary = async (base64Data: string, folder: string): Pr
 // ─── RESEND EMAIL CONFIGURATION ──────────────────────────────────────────────
 const resend = new Resend(process.env.RESEND_API_KEY || 're_123456789');
 
-export const sendEmail = async (to: string, subject: string, htmlContent: string) => {
+export const sendEmail = async (to: string, subject: string, htmlContent: string, attachments?: { filename: string, content: Buffer }[]) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(to)) {
     throw new Error('Invalid recipient email address.');
@@ -112,7 +112,8 @@ export const sendEmail = async (to: string, subject: string, htmlContent: string
       from: fromEmail,
       to,
       subject,
-      html: htmlContent
+      html: htmlContent,
+      attachments
     });
 
     if (response.error) {

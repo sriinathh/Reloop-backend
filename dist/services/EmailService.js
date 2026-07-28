@@ -7,9 +7,14 @@ export class EmailService {
             console.log(`[Email Mock] Sending Reward Credited Email to ${email} for ₹${amount}`);
             return;
         }
+        const fromEmail = process.env.EMAIL_FROM;
+        if (!fromEmail) {
+            console.error('[Email Mock] Missing EMAIL_FROM. Cannot send reward email.');
+            return;
+        }
         try {
             await resend.emails.send({
-                from: 'ReLoop Rewards <rewards@reloop.com>',
+                from: fromEmail,
                 to: email,
                 subject: `₹${amount} Reward Credited to Your Account!`,
                 html: `
@@ -24,7 +29,11 @@ export class EmailService {
             });
         }
         catch (error) {
-            console.error('Failed to send reward email:', error);
+            console.error('[Email Send Error - Complete Log]:', error);
+            const msg = error.message?.toLowerCase() || '';
+            if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified')) {
+                console.error('Email service is not configured correctly for Rewards.');
+            }
         }
     }
     async sendPaymentFailedEmail(email, name, amount, reason) {
@@ -32,9 +41,14 @@ export class EmailService {
             console.log(`[Email Mock] Sending Payment Failed Email to ${email} for ₹${amount}`);
             return;
         }
+        const fromEmail = process.env.EMAIL_FROM;
+        if (!fromEmail) {
+            console.error('[Email Mock] Missing EMAIL_FROM. Cannot send payment failed email.');
+            return;
+        }
         try {
             await resend.emails.send({
-                from: 'ReLoop Support <support@reloop.com>',
+                from: fromEmail,
                 to: email,
                 subject: `Update on your ₹${amount} Reward Payout`,
                 html: `
@@ -49,7 +63,11 @@ export class EmailService {
             });
         }
         catch (error) {
-            console.error('Failed to send payment failed email:', error);
+            console.error('[Email Send Error - Complete Log]:', error);
+            const msg = error.message?.toLowerCase() || '';
+            if (msg.includes('testing emails') || msg.includes('verify a domain') || msg.includes('domain verification') || msg.includes('not verified')) {
+                console.error('Email service is not configured correctly for Payments.');
+            }
         }
     }
 }
