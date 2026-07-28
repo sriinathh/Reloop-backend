@@ -801,7 +801,7 @@ const handleGetProfile = async (req: AuthRequest, res: express.Response) => {
 const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
   try {
     const userId = req.userId || '605c72d6248c89423c7b2a75';
-    const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch } = req.body;
+    const { name, email, phone, aadhaar_number, pan_number, profile_image, account_number, ifsc_code, bank_name, upi_id, upi_qr_url, address, dob, gender, account_holder_name, branch, subscription_plan } = req.body;
 
     let updateData: any = {};
     if (name) updateData.name = name;
@@ -821,6 +821,8 @@ const handleUpdateProfile = async (req: AuthRequest, res: express.Response) => {
       let userUpdate: any = {};
       if (email) userUpdate.email = email;
       if (phone) userUpdate.phone = phone;
+      if (subscription_plan) userUpdate.subscriptionPlan = subscription_plan;
+      if (aadhaar_number) userUpdate.aadhaarVerified = true;
       if (Object.keys(userUpdate).length > 0) {
         await User.findOneAndUpdate({ _id: userId }, userUpdate);
       }

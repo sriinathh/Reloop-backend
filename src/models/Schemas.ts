@@ -10,7 +10,7 @@ export interface IUser extends Document {
   phoneVerified?: boolean;
   aadhaarVerified?: boolean;
   aadhaarData?: any;
-  subscriptionPlan?: 'free' | 'premium';
+  subscriptionPlan?: 'free' | 'basic_49' | 'premium_99';
   subscriptionStatus?: 'active' | 'inactive' | 'cancelled' | 'expired';
   subscriptionStartDate?: Date;
   subscriptionExpiryDate?: Date;
@@ -44,7 +44,7 @@ const UserSchema = new Schema<IUser>({
   phoneVerified: { type: Boolean, default: false },
   aadhaarVerified: { type: Boolean, default: false },
   aadhaarData: { type: Schema.Types.Mixed },
-  subscriptionPlan: { type: String, enum: ['free', 'premium'], default: 'free' },
+  subscriptionPlan: { type: String, enum: ['free', 'basic_49', 'premium_99'], default: 'free' },
   subscriptionStatus: { type: String, enum: ['active', 'inactive', 'cancelled', 'expired'], default: 'inactive' },
   subscriptionStartDate: { type: Date },
   subscriptionExpiryDate: { type: Date },
