@@ -177,7 +177,7 @@ router.post('/auth/register', async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = await User.create({ 
         email, phone, password: hashedPassword, role: 'customer',
-        emailVerified: !!otp, phoneVerified: !!otp, name
+        emailVerified: true, phoneVerified: true, name
       });
       const profile = await Profile.create({ user: user._id, name, languages: ['English'] });
       await Wallet.create({
